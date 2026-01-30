@@ -2,7 +2,7 @@
 
 # ==================================================
 # 脚本名称: Linux 简易运维工具箱 (Debian 专用版)
-# 功能: 针对 Debian 11/12 的信息查询、更新、清理与初始化
+# 功能: 系统信息/更新/清理 + 初始化 (UI样式已还原)
 # 快捷指令: x
 # ==================================================
 
@@ -17,7 +17,7 @@ gl_lan='\033[34m'
 gl_bai='\033[0m'
 gl_kjlan='\033[96m'
 
-# ===== 0. 环境检查 (防止在非 Debian 系统运行) =====
+# ===== 0. 环境检查 =====
 check_debian() {
     if ! command -v apt &>/dev/null; then
         echo -e "${gl_hong}错误: 本脚本仅支持 Debian/Ubuntu 系系统 (未检测到 apt)！${gl_bai}"
@@ -59,43 +59,83 @@ ip_address() {
     get_public_ip() { curl -s https://ipinfo.io/ip && echo; }
     public_ip=$(get_public_ip)
     ipv4_address="$public_ip"
+    ipv6_address=$(curl -s --max-time 1 https://v6.ipinfo.io/ip && echo)
+}
+
+current_timezone() {
+    timedatectl | grep "Time zone" | awk '{print $3}'
 }
 
 # ===== 3. 核心功能模块 =====
 
-# [功能1] 系统信息
+# [功能1] 系统信息 (已还原为经典排版)
 linux_info() {
     clear
     echo -e "${gl_huang}正在采集系统信息...${gl_bai}"
     ip_address
     output_status
-    
+
     local cpu_info=$(lscpu | awk -F': +' '/Model name:/ {print $2; exit}')
-    local cpu_usage=$(awk '{u=$2+$4; t=$2+$4+$5; if (NR==1){u1=u; t1=t;} else printf "%.0f\n", (($2+$4-u1) * 100 / (t-t1))}' <(grep 'cpu ' /proc/stat) <(sleep 1; grep 'cpu ' /proc/stat))
-    local mem_info=$(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)", $3, $2, $3*100/$2}')
+    local cpu_usage_percent=$(awk '{u=$2+$4; t=$2+$4+$5; if (NR==1){u1=u; t1=t;} else printf "%.0f\n", (($2+$4-u1) * 100 / (t-t1))}' \
+        <(grep 'cpu ' /proc/stat) <(sleep 1; grep 'cpu ' /proc/stat))
+    local cpu_cores=$(nproc)
+    local cpu_freq=$(cat /proc/cpuinfo | grep "MHz" | head -n 1 | awk '{printf "%.1f GHz\n", $4/1000}')
+    local mem_info=$(free -b | awk 'NR==2{printf "%.2f/%.2fM (%.2f%%)", $3/1024/1024, $2/1024/1024, $3*100/$2}')
     local disk_info=$(df -h | awk '$NF=="/"{printf "%s/%s (%s)", $3, $2, $5}')
-    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
+    
+    local load=$(uptime | awk '{print $(NF-2), $(NF-1), $NF}')
+    local cpu_arch=$(uname -m)
     local hostname=$(uname -n)
+    local kernel_version=$(uname -r)
+    local congestion_algorithm=$(sysctl -n net.ipv4.tcp_congestion_control)
+    local queue_algorithm=$(sysctl -n net.core.default_qdisc)
+    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
+    local current_time=$(date "+%Y-%m-%d %I:%M %p")
+    local swap_info=$(free -m | awk 'NR==3{used=$3; total=$2; if (total == 0) {percentage=0} else {percentage=used*100/total}; printf "%dM/%dM (%d%%)", used, total, percentage}')
+    local runtime=$(cat /proc/uptime | awk -F. '{run_days=int($1 / 86400);run_hours=int(($1 % 86400) / 3600);run_minutes=int(($1 % 3600) / 60); if (run_days > 0) printf("%d天 ", run_days); if (run_hours > 0) printf("%d时 ", run_hours); printf("%d分\n", run_minutes)}')
+    local timezone=$(current_timezone)
     local tcp_count=$(ss -t | wc -l)
+    local udp_count=$(ss -u | wc -l)
 
     echo ""
-    echo -e "${gl_lv}=== 系统状态面板 (Debian) ===${gl_bai}"
-    echo -e "${gl_kjlan}主机名:     ${gl_bai}$hostname"
-    echo -e "${gl_kjlan}系统版本:   ${gl_bai}$os_info"
-    echo -e "${gl_kjlan}CPU型号:    ${gl_bai}$cpu_info"
-    echo -e "${gl_kjlan}CPU占用:    ${gl_bai}$cpu_usage%"
-    echo -e "${gl_kjlan}内存使用:   ${gl_bai}$mem_info"
-    echo -e "${gl_kjlan}硬盘使用:   ${gl_bai}$disk_info"
-    echo -e "${gl_kjlan}网络流量:   ${gl_bai}入:$rx  出:$tx"
-    echo -e "${gl_kjlan}TCP连接:    ${gl_bai}$tcp_count"
-    echo -e "${gl_kjlan}公网IP:     ${gl_bai}$ipv4_address"
-    echo ""
+    echo -e "${gl_lv}系统信息概览${gl_bai}"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname"
+    echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
+    echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}CPU架构:        ${gl_bai}$cpu_arch"
+    echo -e "${gl_kjlan}CPU型号:        ${gl_bai}$cpu_info"
+    echo -e "${gl_kjlan}CPU核心数:      ${gl_bai}$cpu_cores"
+    echo -e "${gl_kjlan}CPU频率:        ${gl_bai}$cpu_freq"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}CPU占用:        ${gl_bai}$cpu_usage_percent%"
+    echo -e "${gl_kjlan}系统负载:       ${gl_bai}$load"
+    echo -e "${gl_kjlan}TCP|UDP连接数:  ${gl_bai}$tcp_count|$udp_count"
+    echo -e "${gl_kjlan}物理内存:       ${gl_bai}$mem_info"
+    echo -e "${gl_kjlan}虚拟内存:       ${gl_bai}$swap_info"
+    echo -e "${gl_kjlan}硬盘占用:       ${gl_bai}$disk_info"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}总接收:         ${gl_bai}$rx"
+    echo -e "${gl_kjlan}总发送:         ${gl_bai}$tx"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}网络算法:       ${gl_bai}$congestion_algorithm $queue_algorithm"
+    if [ -n "$ipv4_address" ]; then
+        echo -e "${gl_kjlan}IPv4地址:       ${gl_bai}$ipv4_address"
+    fi
+    if [ -n "$ipv6_address" ]; then
+        echo -e "${gl_kjlan}IPv6地址:       ${gl_bai}$ipv6_address"
+    fi
+    echo -e "${gl_kjlan}地理位置:       ${gl_bai}$timezone"
+    echo -e "${gl_kjlan}系统时间:       ${gl_bai}$current_time"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}运行时长:       ${gl_bai}$runtime"
+    echo
 }
 
 # [功能2] 系统更新 (仅 APT)
 linux_update() {
     echo -e "${gl_huang}正在更新 Debian 系统软件包...${gl_bai}"
-    # 使用 noninteractive 模式减少弹窗干扰
     export DEBIAN_FRONTEND=noninteractive
     apt update -y && apt full-upgrade -y -o Dpkg::Options::="--force-confold"
     echo -e "${gl_lv}系统更新完成！${gl_bai}"
@@ -104,19 +144,13 @@ linux_update() {
 # [功能3] 系统清理 (仅 APT + 日志)
 linux_clean() {
     echo -e "${gl_huang}正在清理系统垃圾...${gl_bai}"
-    
-    # 1. APT 清理
     apt autoremove --purge -y
     apt clean -y
-    
-    # 2. 日志清理
     if command -v journalctl &>/dev/null; then
         journalctl --rotate
         journalctl --vacuum-time=1s
         journalctl --vacuum-size=50M
     fi
-    
-    # 3. 临时文件清理
     find /tmp -type f -atime +10 -delete 2>/dev/null
     echo -e "${gl_lv}清理完成！${gl_bai}"
 }
@@ -125,7 +159,6 @@ linux_clean() {
 system_init() {
     echo -e "${gl_huang}正在执行系统初始化配置...${gl_bai}"
     
-    # --- 1. 智能换源 ---
     # 获取系统代号
     if [ -f /etc/os-release ]; then
         OS_CODENAME=$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2 | tr -d '"')
@@ -135,7 +168,6 @@ system_init() {
     [ -f /etc/apt/sources.list ] && cp /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
     
     if [ "$OS_CODENAME" == "bookworm" ]; then
-        # Debian 12
         cat > /etc/apt/sources.list << EOF
 deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
 deb http://deb.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
@@ -143,7 +175,6 @@ deb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-fre
 deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
 EOF
     elif [ "$OS_CODENAME" == "bullseye" ]; then
-        # Debian 11
         cat > /etc/apt/sources.list << EOF
 deb http://deb.debian.org/debian bullseye main contrib non-free
 deb http://deb.debian.org/debian bullseye-updates main contrib non-free
@@ -154,13 +185,11 @@ EOF
         echo -e "${gl_hong}注意: 非标准 Debian 11/12，跳过换源步骤，仅执行优化。${gl_bai}"
     fi
 
-    # --- 2. 系统升级与工具安装 ---
     echo "正在更新系统并安装基础工具..."
     export DEBIAN_FRONTEND=noninteractive
     apt update && apt upgrade -y -o Dpkg::Options::="--force-confold" --ignore-missing
     apt install -y curl wget vim git tar unzip net-tools dnsutils ca-certificates socat cron rsync systemd-timesyncd
 
-    # --- 3. 开启 BBR、内核转发与 IPv6 优化 ---
     echo "正在配置全局内核参数 (BBR + 双栈转发)..."
     rm -f /etc/sysctl.d/99-vps-optimize.conf
 
@@ -169,7 +198,7 @@ EOF
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 
-# 开启双栈内核转发 (Docker/中转/WireGuard 必备)
+# 开启双栈内核转发
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 net.ipv6.conf.default.forwarding = 1
@@ -188,9 +217,6 @@ net.ipv4.conf.default.rp_filter = 0
 EOF
 
     sysctl --system
-    echo "内核参数已全局生效。"
-
-    # --- 4. 时间同步与时区配置 ---
     timedatectl set-timezone Asia/Shanghai
     systemctl enable --now systemd-timesyncd
 
