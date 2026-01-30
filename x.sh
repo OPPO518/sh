@@ -1,5 +1,17 @@
 #!/bin/bash
 
+# ===== 自我安装与别名清理 =====
+# 获取当前脚本的绝对路径
+current_script=$(readlink -f "$0")
+# 目标路径
+target_path="/usr/local/bin/x"
+
+# 如果当前脚本不是在 /usr/local/bin/x 运行，且目标路径与当前不同，则复制过去
+if [ "$current_script" != "$target_path" ]; then
+    cp -f "$current_script" "$target_path"
+    chmod +x "$target_path"
+fi
+
 # ===== 全局颜色变量 =====
 gl_hui='\e[37m'
 gl_hong='\033[31m'
@@ -205,6 +217,24 @@ linux_clean() {
     fi
 }
 
+# ===== 功能 4: 脚本更新 =====
+update_script() {
+    echo -e "${gl_huang}正在检查并更新脚本...${gl_bai}"
+    # 这里的 URL 换成你自己的 GitHub Raw 地址
+    sh_url="https://raw.githubusercontent.com/OPPO518/sh/main/x.sh"
+    
+    # 下载新版本覆盖旧版本
+    if curl -sS -o /usr/local/bin/x "$sh_url"; then
+        chmod +x /usr/local/bin/x
+        echo -e "${gl_lv}更新成功！正在重启脚本...${gl_bai}"
+        sleep 1
+        # 重新执行新脚本
+        exec /usr/local/bin/x
+    else
+        echo -e "${gl_hong}更新失败，请检查网络或 GitHub 链接！${gl_bai}"
+    fi
+}
+
 # ===== 交互逻辑 =====
 break_end() {
     echo -e "${gl_lv}操作完成${gl_bai}"
@@ -217,18 +247,21 @@ main_menu() {
         clear
         echo -e "${gl_kjlan}################################################"
         echo -e "#                                              #"
-        echo -e "#          Linux 简易运维工具箱 (纯净版)       #"
+        echo -e "#            Linux 简易运维工具箱              #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.0 (本地精简版)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统信息查询 (System Info)"
         echo -e "${gl_lv} 2.${gl_bai} 系统更新 (System Update)"
-        echo -e "${gl_lv} 3.${gl_bai} 系统清理 (System Clean)"
+        echo -e "${gl_lv} 3.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_hong} 4.${gl_bai} 退出 (Exit)"
+        echo -e "${gl_kjlan} 4.${gl_bai} 更新脚本 (Update Script)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
         echo -e "------------------------------------------------"
         
-        read -p " 请输入选项 [1-4]: " choice
+        read -p " 请输入选项 [0-4]: " choice
 
         case "$choice" in
             1)
@@ -243,12 +276,15 @@ main_menu() {
                 linux_clean
                 break_end
                 ;;
-            4|0)
-                echo -e "${gl_lv}退出脚本。${gl_bai}"
+            4)
+                update_script  # 这里调用我们刚才写的更新函数
+                ;;
+            0)
+                echo -e "${gl_lv}感谢使用，再见！${gl_bai}"
                 exit 0
                 ;;
             *)
-                echo -e "${gl_hong}无效的选项！${gl_bai}"
+                echo -e "${gl_hong}无效的选项，请重新输入！${gl_bai}"
                 sleep 1
                 ;;
         esac
