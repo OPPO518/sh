@@ -157,56 +157,40 @@ linux_info() {
     echo
 }
 
-# ===== 功能 2: 系统更新 =====
+# ===== 功能 2: 系统更新 (Debian专用 + 重启检测) =====
 linux_update() {
     echo -e "${gl_huang}正在进行系统更新...${gl_bai}"
-    if command -v dnf &>/dev/null; then
-        dnf -y update
-    elif command -v yum &>/dev/null; then
-        yum -y update
-    elif command -v apt &>/dev/null; then
-        # 简化版apt处理，移除原版复杂的fix_dpkg
+    if command -v apt &>/dev/null; then
         apt update -y
         apt full-upgrade -y
-    elif command -v apk &>/dev/null; then
-        apk update && apk upgrade
-    elif command -v pacman &>/dev/null; then
-        pacman -Syu --noconfirm
-    elif command -v zypper &>/dev/null; then
-        zypper refresh
-        zypper update
+        
+        # 检测是否需要重启
+        if [ -f /var/run/reboot-required ]; then
+            echo -e "${gl_hong}注意：检测到内核或核心组件更新，需要重启才能生效！${gl_bai}"
+            read -p "是否立即重启系统？(y/n): " reboot_choice
+            if [[ "$reboot_choice" =~ ^[yY]$ ]]; then
+                echo -e "${gl_lv}正在重启...${gl_bai}"
+                reboot
+            else
+                echo -e "${gl_huang}已取消重启，请稍后手动重启。${gl_bai}"
+            fi
+        else
+            echo -e "${gl_lv}系统更新完成！${gl_bai}"
+        fi
     else
-        echo -e "${gl_hong}未找到支持的包管理器！${gl_bai}"
+        echo -e "${gl_hong}错误：未检测到 apt，本脚本仅支持 Debian/Ubuntu 系统！${gl_bai}"
     fi
 }
 
-# ===== 功能 3: 系统清理 =====
+# ===== 功能 3: 系统清理 (Debian专用) =====
 linux_clean() {
     echo -e "${gl_huang}正在进行系统清理...${gl_bai}"
-    if command -v dnf &>/dev/null; then
-        rpm --rebuilddb
-        dnf autoremove -y
-        dnf clean all
-        dnf makecache
-    elif command -v yum &>/dev/null; then
-        rpm --rebuilddb
-        yum autoremove -y
-        yum clean all
-        yum makecache
-    elif command -v apt &>/dev/null; then
+    if command -v apt &>/dev/null; then
         apt autoremove --purge -y
         apt clean -y
         apt autoclean -y
-    elif command -v apk &>/dev/null; then
-        apk cache clean
-        rm -rf /var/log/*
-        rm -rf /var/cache/apk/*
-        rm -rf /tmp/*
-    elif command -v pacman &>/dev/null; then
-        pacman -Rns $(pacman -Qdtq) --noconfirm 2>/dev/null
-        pacman -Scc --noconfirm
     else
-        echo -e "${gl_huang}未找到特定的清理策略，尝试清理通用日志...${gl_bai}"
+        echo -e "${gl_huang}未找到 apt，跳过包清理...${gl_bai}"
     fi
     
     # 通用清理
@@ -215,6 +199,11 @@ linux_clean() {
         journalctl --vacuum-time=1s
         journalctl --vacuum-size=50M
     fi
+    
+    # 清理 /tmp 目录下超过10天未使用的文件
+    find /tmp -type f -atime +10 -delete 2>/dev/null
+    
+    echo -e "${gl_lv}清理完成！${gl_bai}"
 }
 
 # ===== 功能 4: 脚本更新 =====
