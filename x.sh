@@ -100,6 +100,9 @@ system_initialize() {
         read -p "按回车键返回..."
         return
     fi
+    
+    # [移到这里] 功能说明显示在系统版本下方
+    echo -e "${gl_hui}* 包含换源、BBR、时区及落地/中转环境配置${gl_bai}"
 
     # 2. 询问机器角色 (美化版)
     echo -e "------------------------------------------------"
@@ -410,10 +413,9 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.2 (Init & Reboot Check)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.3 (Optimization UI)${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
-        echo -e "    ${gl_hui}* 包含换源、BBR、时区及落地/中转环境配置${gl_bai}"
+        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init)"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 2.${gl_bai} 系统信息查询 (System Info)"
         echo -e "${gl_lv} 3.${gl_bai} 系统更新 (Update Only)"
