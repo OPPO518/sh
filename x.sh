@@ -415,3 +415,12 @@ main_menu() {
         esac
     done
 }
+
+# ===== 脚本入口 =====
+# 检查root权限
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${gl_hong}错误: 为了执行系统更新和清理，请使用 root 用户运行此脚本！${gl_bai}"
+    exit 1
+fi
+
+main_menu
