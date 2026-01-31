@@ -80,49 +80,53 @@ current_timezone() {
     fi
 }
 
-# ===== 功能模块: 系统初始化 (融合版) =====
+# ===== 功能模块: 系统初始化 (融合增强版) =====
 system_initialize() {
+    clear
+    echo -e "${gl_kjlan}################################################"
+    echo -e "#           系统初始化配置 (System Init)       #"
+    echo -e "################################################${gl_bai}"
+    
     # 1. 自动检测系统版本
     local os_ver=""
     if grep -q "bullseye" /etc/os-release; then
         os_ver="11"
-        echo -e "${gl_huang}检测到系统: Debian 11 (Bullseye)${gl_bai}"
+        echo -e "当前系统: ${gl_huang}Debian 11 (Bullseye)${gl_bai}"
     elif grep -q "bookworm" /etc/os-release; then
         os_ver="12"
-        echo -e "${gl_huang}检测到系统: Debian 12 (Bookworm)${gl_bai}"
+        echo -e "当前系统: ${gl_huang}Debian 12 (Bookworm)${gl_bai}"
     else
         echo -e "${gl_hong}错误: 本脚本仅支持 Debian 11 或 12 系统！${gl_bai}"
+        read -p "按回车键返回..."
         return
     fi
 
-    # 2. 询问机器角色
+    # 2. 询问机器角色 (美化版)
     echo -e "------------------------------------------------"
-    echo -e "请选择该 VPS 的用途："
-    echo -e "${gl_lv} 1.${gl_bai} 落地机 (Landing) - ${gl_hui}关闭转发，极简安全${gl_bai}"
-    echo -e "${gl_lv} 2.${gl_bai} 中转机 (Transit) - ${gl_hui}开启转发，路由优化 (仅D12)${gl_bai}"
+    echo -e "请设定当前 VPS 的业务角色："
+    echo -e "${gl_lv} 1.${gl_bai} 落地机 (Landing)  -> [关闭转发 | 极简安全]"
+    echo -e "${gl_lv} 2.${gl_bai} 中转机 (Transit)  -> [开启转发 | 路由优化]"
     echo -e "------------------------------------------------"
     read -p "请输入选项 [1-2]: " role_choice
 
-    # 3. 执行融合逻辑
-    echo -e "${gl_kjlan}正在执行初始化配置...${gl_bai}"
+    # 3. 执行核心逻辑
+    echo -e "${gl_kjlan}>>> 正在执行初始化，请稍候...${gl_bai}"
 
     # --- 场景 A: Debian 11 + 落地机 ---
     if [ "$os_ver" == "11" ] && [ "$role_choice" == "1" ]; then
         # [备份与换源]
         [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
         cat > /etc/apt/sources.list << EOF
-# Debian 11 主仓库 (Bullseye)
 deb http://deb.debian.org/debian bullseye main contrib non-free
 deb http://deb.debian.org/debian bullseye-updates main contrib non-free
 deb http://security.debian.org/debian-security bullseye-security main contrib non-free
-# Debian 11 Backports (归档源)
 deb http://archive.debian.org/debian bullseye-backports main contrib non-free
 EOF
         # [升级与安装]
         export DEBIAN_FRONTEND=noninteractive
         apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
         apt install curl wget systemd-timesyncd socat cron rsync -y
-        # [内核参数: 落地机模式]
+        # [内核参数: 落地机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
 net.core.default_qdisc = fq
@@ -137,7 +141,7 @@ EOF
 
     # --- 场景 B: Debian 12 + 落地机 ---
     elif [ "$os_ver" == "12" ] && [ "$role_choice" == "1" ]; then
-        # [换源: 含 non-free-firmware]
+        # [换源]
         [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
         cat > /etc/apt/sources.list << EOF
 deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
@@ -149,7 +153,7 @@ EOF
         export DEBIAN_FRONTEND=noninteractive
         apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
         apt install curl wget systemd-timesyncd socat cron rsync -y
-        # [内核参数: 落地机模式]
+        # [内核参数: 落地机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
 net.core.default_qdisc = fq
@@ -164,7 +168,7 @@ EOF
 
     # --- 场景 C: Debian 12 + 中转机 ---
     elif [ "$os_ver" == "12" ] && [ "$role_choice" == "2" ]; then
-        # [换源: 含 non-free-firmware]
+        # [换源]
         [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
         cat > /etc/apt/sources.list << EOF
 deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
@@ -172,11 +176,11 @@ deb http://deb.debian.org/debian-security/ bookworm-security main contrib non-fr
 deb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware
 deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
 EOF
-        # [升级与安装: 增加 ignore-missing]
+        # [升级与安装]
         export DEBIAN_FRONTEND=noninteractive
         apt update && apt upgrade -y -o Dpkg::Options::="--force-confold" --ignore-missing
         apt install curl wget systemd-timesyncd rsync socat -y
-        # [内核参数: 中转双栈优化]
+        # [内核参数: 中转机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
 net.core.default_qdisc = fq
@@ -195,20 +199,56 @@ net.ipv4.conf.default.rp_filter = 0
 EOF
         sysctl --system
 
-    # --- 异常场景 ---
     else
-        echo -e "${gl_hong}错误: 不支持的组合 (如 Debian 11 做中转)，操作已取消。${gl_bai}"
+        echo -e "${gl_hong}警告: 不支持的组合 (如 Debian 11 + 中转)，操作已取消。${gl_bai}"
+        read -p "按回车键返回..."
         return
     fi
 
-    # 4. 通用收尾 (时区与时间)
+    # 4. 通用收尾
     timedatectl set-timezone Asia/Shanghai
     systemctl enable --now systemd-timesyncd
 
-    echo -e "${gl_lv}--- 系统初始化完成 ---${gl_bai}"
-    echo "当前 BBR 状态: $(sysctl -n net.ipv4.tcp_congestion_control)"
-    echo "按回车键返回..."
-    read -r
+    # 5. 详细结果反馈报告
+    echo -e ""
+    echo -e "${gl_lv}====== 初始化配置报告 (Init Report) ======${gl_bai}"
+    
+    # [检查 BBR]
+    local bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control)
+    echo -e " 1. BBR 算法: \t${gl_kjlan}${bbr_status}${gl_bai}"
+    
+    # [检查 转发状态]
+    local fw_status=$(sysctl -n net.ipv4.ip_forward)
+    if [ "$fw_status" == "1" ]; then
+        echo -e " 2. 内核转发: \t${gl_huang}已开启 (中转模式)${gl_bai}"
+    else
+        echo -e " 2. 内核转发: \t${gl_lv}已关闭 (落地模式)${gl_bai}"
+    fi
+
+    # [检查 时间]
+    local current_time=$(date "+%Y-%m-%d %H:%M:%S")
+    echo -e " 3. 当前时间: \t${gl_bai}${current_time} (CST)${gl_bai}"
+
+    echo -e "------------------------------------------------"
+
+    # 6. 重启检测逻辑
+    if [ -f /var/run/reboot-required ]; then
+        echo -e "${gl_hong}!!! 警告: 检测到内核或系统组件更新，必须重启生效 !!!${gl_bai}"
+        echo -e "${gl_hong}!!! Pending Kernel Update Detected !!!${gl_bai}"
+        echo -e "------------------------------------------------"
+        read -p " 是否立即重启 VPS ? (y/n) [默认 y]: " reboot_choice
+        reboot_choice=${reboot_choice:-y}
+        if [[ "$reboot_choice" =~ ^[yY]$ ]]; then
+            echo -e "${gl_lv}正在执行重启...${gl_bai}"
+            reboot
+        else
+            echo -e "${gl_huang}已跳过重启。请务必稍后手动重启！${gl_bai}"
+            read -p "按回车键返回主菜单..."
+        fi
+    else
+        echo -e "${gl_lv}>> 系统状态健康，无需重启。${gl_bai}"
+        read -p "按回车键返回主菜单..."
+    fi
 }
 
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
@@ -370,13 +410,13 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.1 (Init Module Integrated)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.2 (Init & Reboot Check)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
-        echo -e "    ${gl_hui}* 智能识别 D11/D12 并配置 落地/中转 环境${gl_bai}"
+        echo -e "    ${gl_hui}* 包含换源、BBR、时区及落地/中转环境配置${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 2.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 3.${gl_bai} 系统更新 (System Update)"
+        echo -e "${gl_lv} 3.${gl_bai} 系统更新 (Update Only)"
         echo -e "${gl_lv} 4.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
