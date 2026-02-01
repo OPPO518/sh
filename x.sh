@@ -336,6 +336,282 @@ swap_management() {
     done
 }
 
+# ===== 功能模块: Nftables 防火墙管理 (核心) =====
+nftables_management() {
+    # --- 内部函数: 自动检测 SSH 端口 (防自锁核心) ---
+    detect_ssh_port() {
+        # 尝试从 sshd 进程抓取
+        local port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1)
+        # 如果抓不到 (比如 sshd 未运行??)，默认兜底 22
+        if [ -z "$port" ]; then port="22"; fi
+        echo "$port"
+    }
+
+    # --- 内部函数: 落地机初始化 ---
+    init_landing_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
+        
+        # 1. 安装
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        # 2. 写入配置 (使用 Set 集合便于后期管理)
+        cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet my_landing {
+    # 定义开放端口集合 (Set)
+    set allowed_tcp { type inet_service; flags interval; }
+    set allowed_udp { type inet_service; flags interval; }
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        
+        # 强制放行检测到的 SSH 端口
+        tcp dport $ssh_port accept
+        
+        # 引用集合，放行自定义端口
+        tcp dport @allowed_tcp accept
+        udp dport @allowed_udp accept
+    }
+    chain forward { type filter hook forward priority 0; policy drop; }
+    chain output { type filter hook output priority 0; policy accept; }
+}
+EOF
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}落地机防火墙部署完成！${gl_bai}"
+    }
+
+    # --- 内部函数: 中转机初始化 ---
+    init_transit_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 中转机(Transit) 策略 (启用 NAT/Maps)...${gl_bai}"
+
+        # 1. 基础环境清理与安装
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        # 2. 加载内核模块
+        modprobe nft_nat 2>/dev/null
+        modprobe br_netfilter 2>/dev/null
+        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-transit-forward.conf
+        sysctl -p /etc/sysctl.d/99-transit-forward.conf >/dev/null
+
+        # 3. 写入配置 (使用 Maps 映射表)
+        cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet my_transit {
+    # 集合: 本地放行端口
+    set local_tcp { type inet_service; flags interval; }
+    set local_udp { type inet_service; flags interval; }
+
+    # 字典: 端口转发映射 (本机端口 : 目标IP . 目标端口)
+    map fwd_tcp { type inet_service : ipv4_addr . inet_service; }
+    map fwd_udp { type inet_service : ipv4_addr . inet_service; }
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        
+        # SSH 必须放行
+        tcp dport $ssh_port accept
+        
+        # 放行本地业务
+        tcp dport @local_tcp accept
+        udp dport @local_udp accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ct state established,related accept
+        # 关键优化: MSS Clamping
+        tcp flags syn tcp option maxseg size set 1360
+    }
+
+    chain prerouting {
+        type nat hook prerouting priority -100; policy accept;
+        # 查表转发 (Map Lookups)
+        dnat ip to tcp dport map @fwd_tcp
+        dnat ip to udp dport map @fwd_udp
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        # 智能伪装: 仅对转发流量做 Masquerade (防止回程黑洞)
+        # 本地发出的流量保持原样
+        oifname != "lo" masquerade
+    }
+}
+EOF
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}中转机防火墙部署完成 (已启用 Maps 转发架构)！${gl_bai}"
+    }
+
+    # --- 内部函数: 可视化列表 ---
+    list_rules_ui() {
+        echo -e "${gl_huang}=== 本地端口放行列表 ===${gl_bai}"
+        # 检查是否是中转表还是落地表
+        local table_name=""
+        if nft list tables | grep -q "my_transit"; then table_name="my_transit"; else table_name="my_landing"; fi
+        
+        if [ -z "$table_name" ]; then echo "防火墙未初始化"; return; fi
+
+        # 列出集合元素
+        echo -n "[TCP] "; nft list set inet $table_name allowed_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' || nft list set inet $table_name local_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//'
+        echo ""
+        echo -n "[UDP] "; nft list set inet $table_name allowed_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' || nft list set inet $table_name local_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//'
+        echo ""
+        
+        if [ "$table_name" == "my_transit" ]; then
+            echo -e "${gl_kjlan}=== 端口转发规则 (IPv4 Forwarding) ===${gl_bai}"
+            echo -e "格式: ${gl_hui}本机端口 -> 目标IP : 目标端口${gl_bai}"
+            echo "--- TCP 转发 ---"
+            nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}'
+            echo "--- UDP 转发 ---"
+            nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}'
+        fi
+        echo "------------------------------------------------"
+    }
+
+    # --- 菜单循环 ---
+    while true; do
+        clear
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#          Nftables 防火墙与中转管理           #"
+        echo -e "################################################${gl_bai}"
+        
+        # 动态显示简报
+        local ssh_p=$(detect_ssh_port)
+        echo -e "当前 SSH 端口: ${gl_lv}${ssh_p}${gl_bai} (自动保护中)"
+        
+        if nft list tables | grep -q "my_transit"; then
+            echo -e "当前模式: ${gl_kjlan}中转机 (Transit NAT)${gl_bai}"
+            mode="transit"
+            set_tcp="local_tcp"; set_udp="local_udp"
+        elif nft list tables | grep -q "my_landing"; then
+            echo -e "当前模式: ${gl_huang}落地机 (Landing FW)${gl_bai}"
+            mode="landing"
+            set_tcp="allowed_tcp"; set_udp="allowed_udp"
+        else
+            echo -e "当前模式: ${gl_hong}未初始化 / 未知${gl_bai}"
+            mode="none"
+        fi
+        echo -e "------------------------------------------------"
+        
+        # 根据模式显示菜单
+        if [ "$mode" == "none" ]; then
+            echo -e "${gl_lv} 1.${gl_bai} 初始化为：落地机防火墙 (仅放行)"
+            echo -e "${gl_lv} 2.${gl_bai} 初始化为：中转机防火墙 (含转发面板)"
+        else
+            echo -e "${gl_hui} > 防火墙规则管理:${gl_bai}"
+            echo -e "${gl_lv} 3.${gl_bai} 查看所有规则 (List Rules)"
+            echo -e "${gl_lv} 4.${gl_bai} 添加放行端口 (Allow Port)"
+            echo -e "${gl_lv} 5.${gl_bai} 删除放行端口 (Delete Port)"
+            
+            if [ "$mode" == "transit" ]; then
+                echo -e "${gl_hui} > 端口转发管理 (Forwarding):${gl_bai}"
+                echo -e "${gl_kjlan} 6.${gl_bai} 添加转发规则 (Add Forward)"
+                echo -e "${gl_kjlan} 7.${gl_bai} 删除转发规则 (Del Forward)"
+            fi
+            
+            echo -e "------------------------------------------------"
+            echo -e "${gl_hong} 8.${gl_bai} 重置/切换模式 (Re-Init)"
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        
+        read -p "请输入选项: " nf_choice
+
+        case "$nf_choice" in
+            1) init_landing_firewall; read -p "按回车继续..." ;;
+            2) init_transit_firewall; read -p "按回车继续..." ;;
+            3) list_rules_ui; read -p "按回车继续..." ;;
+            4) 
+                read -p "请输入要放行的 TCP/UDP 端口 (如 8080): " p_port
+                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
+                    nft add element inet $table $set_tcp { $p_port }
+                    nft add element inet $table $set_udp { $p_port }
+                    # 持久化
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_lv}端口 $p_port 已放行。${gl_bai}"
+                else
+                    echo "无效端口"
+                fi
+                sleep 1
+                ;;
+            5)
+                list_rules_ui
+                read -p "请输入要删除的放行端口: " p_port
+                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
+                    # 尝试删除，即使报错也不影响
+                    nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
+                    nft delete element inet $table $set_udp { $p_port } 2>/dev/null
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_hong}端口 $p_port 已移除。${gl_bai}"
+                fi
+                sleep 1
+                ;;
+            6) # 添加转发 (仅中转)
+                if [ "$mode" != "transit" ]; then echo "仅中转模式可用"; sleep 1; continue; fi
+                echo -e "请输入转发规则:"
+                read -p "1. 本机监听端口 (如 8080): " local_p
+                read -p "2. 目标 IP 地址 (如 1.1.1.1): " dest_ip
+                read -p "3. 目标端口     (如 80): " dest_p
+                
+                if [[ -n "$local_p" && -n "$dest_ip" && -n "$dest_p" ]]; then
+                    # 写入 Map:  8080 : 1.1.1.1 . 80
+                    nft add element inet my_transit fwd_tcp { $local_p : $dest_ip . $dest_p }
+                    nft add element inet my_transit fwd_udp { $local_p : $dest_ip . $dest_p }
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_lv}转发规则已添加: :$local_p -> $dest_ip:$dest_p${gl_bai}"
+                else
+                    echo "输入不完整"
+                fi
+                read -p "按回车继续..."
+                ;;
+            7) # 删除转发 (仅中转)
+                if [ "$mode" != "transit" ]; then echo "仅中转模式可用"; sleep 1; continue; fi
+                list_rules_ui
+                read -p "请输入要删除转发的本机端口 (如 8080): " local_p
+                if [[ "$local_p" =~ ^[0-9]+$ ]]; then
+                    nft delete element inet my_transit fwd_tcp { $local_p } 2>/dev/null
+                    nft delete element inet my_transit fwd_udp { $local_p } 2>/dev/null
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_hong}端口 $local_p 的转发规则已移除。${gl_bai}"
+                fi
+                sleep 1
+                ;;
+            8) # 重新初始化
+                echo -e "${gl_hong}注意: 这将清空当前所有规则！${gl_bai}"
+                read -p "确定重置吗？(y/n): " confirm
+                if [[ "$confirm" == "y" ]]; then mode="none"; fi
+                ;;
+            0) return ;;
+            *) echo "无效选项" ;;
+        esac
+    done
+}
+
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
     clear
@@ -496,14 +772,16 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.4 (Swap Module Added)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.5 (Nftables Manager)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 3.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 4.${gl_bai} 系统更新 (Update Only)"
-        echo -e "${gl_lv} 5.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 4.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 5.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 6.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
@@ -514,9 +792,10 @@ main_menu() {
         case "$choice" in
             1) system_initialize ;;
             2) swap_management ;;
-            3) linux_info; break_end ;;
-            4) linux_update; break_end ;;
-            5) linux_clean; break_end ;;
+            3) nftables_management ;;
+            4) linux_info; break_end ;;
+            5) linux_update; break_end ;;
+            6) linux_clean; break_end ;;
             9) update_script ;;
             0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
             *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
