@@ -374,60 +374,7 @@ nftables_management() {
         echo "$port"
     }
 
-    # --- 内部函数: 落地机初始化 (最终修正版) ---
-    init_landing_firewall() {
-        local ssh_port=$(detect_ssh_port)
-        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
-        echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
-        
-        # 1. 环境清理 (确保没有其他防火墙干扰)
-        echo -e "正在清理冲突组件..."
-        ufw disable 2>/dev/null || true
-        apt purge ufw -y 2>/dev/null
-        
-        # 2. 确保内核层面关闭转发 (角色修正: 即使之前是中转，现在也要关掉)
-        sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
-        # 清理可能存在的中转机配置文件，防止重启复活
-        rm -f /etc/sysctl.d/99-transit-forward.conf
-        
-        # 3. 安装 Nftables
-        apt update -y && apt install nftables -y
-        systemctl enable nftables
-
-        # 4. 写入配置 (落地机策略: 仅 Set 管理)
-        cat > /etc/nftables.conf << EOF
-#!/usr/sbin/nft -f
-flush ruleset
-
-table inet my_landing {
-    # 定义开放端口集合 (Set)
-    set allowed_tcp { type inet_service; flags interval; }
-    set allowed_udp { type inet_service; flags interval; }
-
-    chain input {
-        type filter hook input priority 0; policy drop;
-        iif "lo" accept
-        ct state established,related accept
-        icmp type echo-request accept
-        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
-        
-        # 强制放行检测到的 SSH 端口
-        tcp dport $ssh_port accept
-        
-        # 引用集合，放行自定义端口
-        tcp dport @allowed_tcp accept
-        udp dport @allowed_udp accept
-    }
-    chain forward { type filter hook forward priority 0; policy drop; }
-    chain output { type filter hook output priority 0; policy accept; }
-}
-EOF
-        nft -f /etc/nftables.conf
-        systemctl restart nftables
-        echo -e "${gl_lv}落地机防火墙部署完成 (冲突已清理/转发已关闭)！${gl_bai}"
-    }
-
-    # --- 内部函数: 中转机初始化 ---
+    # --- 内部函数: 中转机初始化 (参数全量修正版) ---
     init_transit_firewall() {
         local ssh_port=$(detect_ssh_port)
         echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
@@ -439,23 +386,45 @@ EOF
         apt update -y && apt install nftables -y
         systemctl enable nftables
 
-        # 2. 加载内核模块
+        # 2. [核心修正] 全量重写内核参数 (对齐 System Init 中转标准)
+        # 确保 rp_filter 和 IPv6 转发都正确开启，防止断流
+        echo -e "正在应用中转机内核参数..."
         modprobe nft_nat 2>/dev/null
         modprobe br_netfilter 2>/dev/null
-        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-transit-forward.conf
-        sysctl -p /etc/sysctl.d/99-transit-forward.conf >/dev/null
+        
+        cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+# 开启 BBR
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
 
-        # 3. 写入配置 (使用 Maps 映射表)
+# --- 中转机核心: 开启转发 ---
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.default.forwarding = 1
+
+# 宽松路由策略 (解决中转丢包的关键)
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
+
+# 优化连接数
+net.netfilter.nf_conntrack_max = 1000000
+net.nf_conntrack_max = 1000000
+EOF
+        # 立即生效，无需重启
+        sysctl --system >/dev/null 2>&1
+
+        # 3. 写入配置 (Maps 映射表)
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 flush ruleset
 
 table inet my_transit {
-    # 集合: 本地放行端口
     set local_tcp { type inet_service; flags interval; }
     set local_udp { type inet_service; flags interval; }
-
-    # 字典: 端口转发映射 (本机端口 : 目标IP . 目标端口)
     map fwd_tcp { type inet_service : ipv4_addr . inet_service; }
     map fwd_udp { type inet_service : ipv4_addr . inet_service; }
 
@@ -465,11 +434,7 @@ table inet my_transit {
         ct state established,related accept
         icmp type echo-request accept
         icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
-        
-        # SSH 必须放行
         tcp dport $ssh_port accept
-        
-        # 放行本地业务
         tcp dport @local_tcp accept
         udp dport @local_udp accept
     }
@@ -477,28 +442,112 @@ table inet my_transit {
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
-        # 关键优化: MSS Clamping
         tcp flags syn tcp option maxseg size set 1360
     }
 
     chain prerouting {
         type nat hook prerouting priority -100; policy accept;
-        # 查表转发 (Map Lookups)
         dnat ip to tcp dport map @fwd_tcp
         dnat ip to udp dport map @fwd_udp
     }
 
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
-        # 智能伪装: 仅对转发流量做 Masquerade (防止回程黑洞)
-        # 本地发出的流量保持原样
         oifname != "lo" masquerade
     }
 }
 EOF
         nft -f /etc/nftables.conf
         systemctl restart nftables
-        echo -e "${gl_lv}中转机防火墙部署完成 (已启用 Maps 转发架构)！${gl_bai}"
+        echo -e "${gl_lv}中转机防火墙部署完成 (内核参数已同步修正)！${gl_bai}"
+    }
+
+    # --- 内部函数: 中转机初始化 (参数全量修正版) ---
+    init_transit_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 中转机(Transit) 策略 (启用 NAT/Maps)...${gl_bai}"
+
+        # 1. 基础环境清理与安装
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        # 2. [核心修正] 全量重写内核参数 (对齐 System Init 中转标准)
+        # 确保 rp_filter 和 IPv6 转发都正确开启，防止断流
+        echo -e "正在应用中转机内核参数..."
+        modprobe nft_nat 2>/dev/null
+        modprobe br_netfilter 2>/dev/null
+        
+        cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+# 开启 BBR
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
+# --- 中转机核心: 开启转发 ---
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.default.forwarding = 1
+
+# 宽松路由策略 (解决中转丢包的关键)
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
+
+# 优化连接数
+net.netfilter.nf_conntrack_max = 1000000
+net.nf_conntrack_max = 1000000
+EOF
+        # 立即生效，无需重启
+        sysctl --system >/dev/null 2>&1
+
+        # 3. 写入配置 (Maps 映射表)
+        cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet my_transit {
+    set local_tcp { type inet_service; flags interval; }
+    set local_udp { type inet_service; flags interval; }
+    map fwd_tcp { type inet_service : ipv4_addr . inet_service; }
+    map fwd_udp { type inet_service : ipv4_addr . inet_service; }
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        tcp dport $ssh_port accept
+        tcp dport @local_tcp accept
+        udp dport @local_udp accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ct state established,related accept
+        tcp flags syn tcp option maxseg size set 1360
+    }
+
+    chain prerouting {
+        type nat hook prerouting priority -100; policy accept;
+        dnat ip to tcp dport map @fwd_tcp
+        dnat ip to udp dport map @fwd_udp
+    }
+
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        oifname != "lo" masquerade
+    }
+}
+EOF
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}中转机防火墙部署完成 (内核参数已同步修正)！${gl_bai}"
     }
 
     # --- 内部函数: 可视化列表 (优化版) ---
