@@ -464,30 +464,46 @@ EOF
         echo -e "${gl_lv}中转机防火墙部署完成 (已启用 Maps 转发架构)！${gl_bai}"
     }
 
-    # --- 内部函数: 可视化列表 ---
+    # --- 内部函数: 可视化列表 (优化版) ---
     list_rules_ui() {
-        echo -e "${gl_huang}=== 本地端口放行列表 ===${gl_bai}"
-        # 检查是否是中转表还是落地表
+        echo -e "${gl_huang}=== 防火墙规则概览 (Firewall Status) ===${gl_bai}"
+        
+        # 1. 显式显示基础保护 (SSH)
+        local current_ssh=$(detect_ssh_port)
+        echo -e "基础防自锁: ${gl_lv}SSH Port ${current_ssh} [✔ Accepted]${gl_bai}"
+        
+        # 2. 确定当前使用的表名 (Landing vs Transit)
         local table_name=""
         if nft list tables | grep -q "my_transit"; then table_name="my_transit"; else table_name="my_landing"; fi
         
-        if [ -z "$table_name" ]; then echo "防火墙未初始化"; return; fi
+        if [ -z "$table_name" ]; then echo -e "${gl_hong}防火墙未初始化${gl_bai}"; return; fi
 
-        # 列出集合元素
-        echo -n "[TCP] "; nft list set inet $table_name allowed_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' || nft list set inet $table_name local_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//'
-        echo ""
-        echo -n "[UDP] "; nft list set inet $table_name allowed_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' || nft list set inet $table_name local_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//'
-        echo ""
+        echo "------------------------------------------------"
+        echo -e "${gl_huang}=== 自定义端口放行 (Custom Ports) ===${gl_bai}"
+
+        # 3. 抓取并显示集合内容 (优化显示逻辑，为空时显示“无”)
+        # 尝试抓取 allowed_tcp (落地) 或 local_tcp (中转)
+        local tcp_list=$(nft list set inet $table_name allowed_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t' || nft list set inet $table_name local_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t')
+        local udp_list=$(nft list set inet $table_name allowed_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t' || nft list set inet $table_name local_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t')
+
+        echo -e "[TCP] ${gl_kjlan}${tcp_list:-无}${gl_bai}"
+        echo -e "[UDP] ${gl_kjlan}${udp_list:-无}${gl_bai}"
+        echo "------------------------------------------------"
         
+        # 4. 显示转发规则 (仅中转模式)
         if [ "$table_name" == "my_transit" ]; then
             echo -e "${gl_kjlan}=== 端口转发规则 (IPv4 Forwarding) ===${gl_bai}"
             echo -e "格式: ${gl_hui}本机端口 -> 目标IP : 目标端口${gl_bai}"
+            
             echo "--- TCP 转发 ---"
-            nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}'
+            local tcp_fwd=$(nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
+            if [ -z "$tcp_fwd" ]; then echo "无"; else echo "$tcp_fwd"; fi
+            
             echo "--- UDP 转发 ---"
-            nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}'
+            local udp_fwd=$(nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
+            if [ -z "$udp_fwd" ]; then echo "无"; else echo "$udp_fwd"; fi
+            echo "------------------------------------------------"
         fi
-        echo "------------------------------------------------"
     }
 
     # --- 菜单循环 ---
