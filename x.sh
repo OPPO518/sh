@@ -347,17 +347,27 @@ nftables_management() {
         echo "$port"
     }
 
-    # --- 内部函数: 落地机初始化 ---
+    # --- 内部函数: 落地机初始化 (最终修正版) ---
     init_landing_firewall() {
         local ssh_port=$(detect_ssh_port)
         echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
         echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
         
-        # 1. 安装
+        # 1. 环境清理 (确保没有其他防火墙干扰)
+        echo -e "正在清理冲突组件..."
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        
+        # 2. 确保内核层面关闭转发 (角色修正: 即使之前是中转，现在也要关掉)
+        sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
+        # 清理可能存在的中转机配置文件，防止重启复活
+        rm -f /etc/sysctl.d/99-transit-forward.conf
+        
+        # 3. 安装 Nftables
         apt update -y && apt install nftables -y
         systemctl enable nftables
 
-        # 2. 写入配置 (使用 Set 集合便于后期管理)
+        # 4. 写入配置 (落地机策略: 仅 Set 管理)
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 flush ruleset
@@ -387,7 +397,7 @@ table inet my_landing {
 EOF
         nft -f /etc/nftables.conf
         systemctl restart nftables
-        echo -e "${gl_lv}落地机防火墙部署完成！${gl_bai}"
+        echo -e "${gl_lv}落地机防火墙部署完成 (冲突已清理/转发已关闭)！${gl_bai}"
     }
 
     # --- 内部函数: 中转机初始化 ---
