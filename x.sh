@@ -550,7 +550,7 @@ EOF
         echo -e "${gl_lv}中转机防火墙部署完成 (内核参数已同步修正)！${gl_bai}"
     }
 
-    # --- 内部函数: 可视化列表 (优化版) ---
+    # --- 内部函数: 可视化列表 (Bug修复版) ---
     list_rules_ui() {
         echo -e "${gl_huang}=== 防火墙规则概览 (Firewall Status) ===${gl_bai}"
         
@@ -558,19 +558,31 @@ EOF
         local current_ssh=$(detect_ssh_port)
         echo -e "基础防自锁: ${gl_lv}SSH Port ${current_ssh} [✔ Accepted]${gl_bai}"
         
-        # 2. 确定当前使用的表名 (Landing vs Transit)
+        # 2. 确定当前使用的表名和集合名
         local table_name=""
-        if nft list tables | grep -q "my_transit"; then table_name="my_transit"; else table_name="my_landing"; fi
+        local set_tcp_name=""
+        local set_udp_name=""
         
-        if [ -z "$table_name" ]; then echo -e "${gl_hong}防火墙未初始化${gl_bai}"; return; fi
+        if nft list tables | grep -q "my_transit"; then 
+            table_name="my_transit"
+            set_tcp_name="local_tcp"
+            set_udp_name="local_udp"
+        elif nft list tables | grep -q "my_landing"; then
+            table_name="my_landing"
+            set_tcp_name="allowed_tcp"
+            set_udp_name="allowed_udp"
+        else 
+            echo -e "${gl_hong}防火墙未初始化${gl_bai}"
+            return
+        fi
 
         echo "------------------------------------------------"
         echo -e "${gl_huang}=== 自定义端口放行 (Custom Ports) ===${gl_bai}"
 
-        # 3. 抓取并显示集合内容 (优化显示逻辑，为空时显示“无”)
-        # 尝试抓取 allowed_tcp (落地) 或 local_tcp (中转)
-        local tcp_list=$(nft list set inet $table_name allowed_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t' || nft list set inet $table_name local_tcp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t')
-        local udp_list=$(nft list set inet $table_name allowed_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t' || nft list set inet $table_name local_udp 2>/dev/null | grep 'elements' | sed 's/elements = { //; s/ }//' | tr -d '\t')
+        # 3. 抓取并显示集合内容 (使用 awk 忽略缩进，解决显示为空的 Bug)
+        # 逻辑：列出集合 -> 找 elements 行 -> 截取 { 后面的内容 -> 截取 } 前面的内容 -> 去掉空格
+        local tcp_list=$(nft list set inet $table_name $set_tcp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
+        local udp_list=$(nft list set inet $table_name $set_udp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
 
         echo -e "[TCP] ${gl_kjlan}${tcp_list:-无}${gl_bai}"
         echo -e "[UDP] ${gl_kjlan}${udp_list:-无}${gl_bai}"
@@ -582,6 +594,7 @@ EOF
             echo -e "格式: ${gl_hui}本机端口 -> 目标IP : 目标端口${gl_bai}"
             
             echo "--- TCP 转发 ---"
+            # 使用 awk 格式化输出，处理冒号和点号
             local tcp_fwd=$(nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
             if [ -z "$tcp_fwd" ]; then echo "无"; else echo "$tcp_fwd"; fi
             
