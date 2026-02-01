@@ -618,9 +618,24 @@ EOF
                 sleep 1
                 ;;
             8) # 重新初始化
-                echo -e "${gl_hong}注意: 这将清空当前所有规则！${gl_bai}"
+                echo -e "${gl_hong}注意: 这将清空当前所有规则并重置模式！${gl_bai}"
                 read -p "确定重置吗？(y/n): " confirm
-                if [[ "$confirm" == "y" ]]; then mode="none"; fi
+                if [[ "$confirm" == "y" ]]; then
+                    echo -e "${gl_huang}正在清除 Nftables 规则...${gl_bai}"
+                    
+                    # 1. 物理清除内核规则
+                    nft flush ruleset
+                    
+                    # 2. 清空配置文件 (防止重启后旧规则复活)
+                    echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
+                    echo "flush ruleset" >> /etc/nftables.conf
+                    
+                    # 3. 重置内部状态
+                    mode="none"
+                    
+                    echo -e "${gl_lv}已重置！现在可以重新选择模式。${gl_bai}"
+                    sleep 1
+                fi
                 ;;
             0) return ;;
             *) echo "无效选项" ;;
