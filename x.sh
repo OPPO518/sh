@@ -138,11 +138,19 @@ EOF
         # [内核参数: 落地机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+# 开启 BBR
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+
+# --- 落地机核心安全设置: 关闭转发 ---
 net.ipv4.ip_forward = 0
 net.ipv6.conf.all.forwarding = 0
+
+# 优化连接数 (防止并发高时丢包)
 net.netfilter.nf_conntrack_max = 1000000
+net.nf_conntrack_max = 1000000
+
+# 允许 Ping (便于监测)
 net.ipv4.icmp_echo_ignore_all = 0
 net.ipv6.icmp.echo_ignore_all = 0
 EOF
@@ -165,16 +173,24 @@ EOF
         # [内核参数: 落地机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+# 开启 BBR
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+
+# --- 落地机核心安全设置: 关闭转发 ---
 net.ipv4.ip_forward = 0
 net.ipv6.conf.all.forwarding = 0
+
+# 优化连接数 (防止并发高时丢包)
 net.netfilter.nf_conntrack_max = 1000000
+net.nf_conntrack_max = 1000000
+
+# 允许 Ping (便于监测)
 net.ipv4.icmp_echo_ignore_all = 0
 net.ipv6.icmp.echo_ignore_all = 0
 EOF
         sysctl --system
-
+        
     # --- 场景 C: Debian 12 + 中转机 ---
     elif [ "$os_ver" == "12" ] && [ "$role_choice" == "2" ]; then
         # [换源]
@@ -192,19 +208,30 @@ EOF
         # [内核参数: 中转机]
         rm -f /etc/sysctl.d/99-vps-optimize.conf
         cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+# 开启 BBR
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+
+# --- 中转机核心功能: 开启转发 ---
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
 net.ipv6.conf.default.forwarding = 1
-net.ipv4.icmp_echo_ignore_all = 0
-net.ipv6.icmp.echo_ignore_all = 0
+
+# 宽松路由策略 (防止多网卡/隧道环境丢包)
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
 net.ipv6.conf.all.disable_ipv6 = 0
 net.ipv6.conf.default.disable_ipv6 = 0
 net.ipv6.conf.all.accept_ra = 2
 net.ipv6.conf.default.accept_ra = 2
-net.ipv4.conf.all.rp_filter = 0
-net.ipv4.conf.default.rp_filter = 0
+
+# 优化连接数 (中转机连接数通常是双倍的，必须大)
+net.netfilter.nf_conntrack_max = 1000000
+net.nf_conntrack_max = 1000000
+
+# 允许 Ping
+net.ipv4.icmp_echo_ignore_all = 0
+net.ipv6.icmp.echo_ignore_all = 0
 EOF
         sysctl --system
 
