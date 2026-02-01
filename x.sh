@@ -254,6 +254,82 @@ EOF
     fi
 }
 
+# ===== 功能模块: Swap 虚拟内存管理 =====
+swap_management() {
+    while true; do
+        clear
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#            Swap 虚拟内存管理 (防 OOM 杀进程)     #"
+        echo -e "################################################${gl_bai}"
+        
+        # 实时获取 Swap 状态
+        local swap_total=$(free -m | grep Swap | awk '{print $2}')
+        local swap_used=$(free -m | grep Swap | awk '{print $3}')
+        
+        if [ "$swap_total" -eq 0 ]; then
+            echo -e "当前状态: ${gl_hong}未启用 Swap${gl_bai}"
+        else
+            echo -e "当前状态: ${gl_lv}已启用${gl_bai} | 总计: ${gl_kjlan}${swap_total}MB${gl_bai} | 已用: ${gl_huang}${swap_used}MB${gl_bai}"
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 1.${gl_bai} 添加/扩容 Swap (建议内存的 1-2 倍)"
+        echo -e "${gl_hong} 2.${gl_bai} 卸载/关闭 Swap"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hui} 0. 返回上级菜单${gl_bai}"
+        echo -e "------------------------------------------------"
+        
+        read -p "请输入选项 [0-2]: " choice
+
+        case "$choice" in
+            1)
+                echo -e "------------------------------------------------"
+                read -p "请输入需要添加的 Swap 大小 (单位: MB，例如 1024): " swap_size
+                if [[ ! "$swap_size" =~ ^[0-9]+$ ]]; then
+                    echo -e "${gl_hong}错误: 请输入纯数字！${gl_bai}"
+                    sleep 1
+                    continue
+                fi
+
+                echo -e "${gl_huang}正在处理 (清理旧文件 -> 创建新文件)...${gl_bai}"
+                # 1. 先清理旧的，防止重复
+                swapoff -a 2>/dev/null
+                rm -f /swapfile 2>/dev/null
+                sed -i '/swapfile/d' /etc/fstab
+
+                # 2. 创建新 Swap (使用 dd 兼容性最佳)
+                if dd if=/dev/zero of=/swapfile bs=1M count=$swap_size status=progress; then
+                    chmod 600 /swapfile
+                    mkswap /swapfile
+                    swapon /swapfile
+                    # 3. 写入 fstab 实现开机自启
+                    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+                    
+                    echo -e "${gl_lv}成功！Swap 已设定为 ${swap_size}MB。${gl_bai}"
+                else
+                    echo -e "${gl_hong}创建失败，请检查磁盘空间。${gl_bai}"
+                fi
+                read -p "按回车键继续..."
+                ;;
+            2)
+                echo -e "${gl_huang}正在卸载 Swap...${gl_bai}"
+                swapoff -a
+                rm -f /swapfile
+                sed -i '/swapfile/d' /etc/fstab
+                echo -e "${gl_lv}Swap 已移除。${gl_bai}"
+                read -p "按回车键继续..."
+                ;;
+            0)
+                return
+                ;;
+            *)
+                echo -e "${gl_hong}无效选项${gl_bai}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
     clear
@@ -405,6 +481,7 @@ break_end() {
     read -r
 }
 
+# ===== 主菜单 =====
 main_menu() {
     while true; do
         clear
@@ -413,13 +490,14 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.3 (Optimization UI)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.4 (Swap Module Added)${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init)"
+        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
+        echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 2.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 3.${gl_bai} 系统更新 (Update Only)"
-        echo -e "${gl_lv} 4.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_lv} 3.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 4.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 5.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
@@ -428,32 +506,14 @@ main_menu() {
         read -p " 请输入选项 [0-9]: " choice
 
         case "$choice" in
-            1)
-                system_initialize
-                ;;
-            2)
-                linux_info
-                break_end
-                ;;
-            3)
-                linux_update
-                break_end
-                ;;
-            4)
-                linux_clean
-                break_end
-                ;;
-            9)
-                update_script
-                ;;
-            0)
-                echo -e "${gl_lv}再见！${gl_bai}"
-                exit 0
-                ;;
-            *)
-                echo -e "${gl_hong}无效的选项！${gl_bai}"
-                sleep 1
-                ;;
+            1) system_initialize ;;
+            2) swap_management ;;
+            3) linux_info; break_end ;;
+            4) linux_update; break_end ;;
+            5) linux_clean; break_end ;;
+            9) update_script ;;
+            0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
+            *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
         esac
     done
 }
