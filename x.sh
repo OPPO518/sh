@@ -788,8 +788,25 @@ EOF
             2) check_f2b_status; read -p "按回车继续..." ;;
             3) unban_ip; read -p "按回车继续..." ;;
             4) 
-                echo -e "${gl_huang}正在显示最后 20 条日志 (按 Ctrl+C 退出)...${gl_bai}"
-                tail -f -n 20 /var/log/fail2ban.log
+                echo -e "${gl_huang}正在实时显示日志 (显示最后 20 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                
+                # 1. 在后台启动 tail，让它持续输出到屏幕
+                tail -f -n 20 /var/log/fail2ban.log &
+                # 记录 tail 的进程 ID (PID)
+                local tail_pid=$!
+                
+                # 2. 脚本暂停在这里，等待用户按回车 (Dummy Read)
+                read -r
+                
+                # 3. 用户按回车后，杀掉后台的 tail 进程
+                kill $tail_pid >/dev/null 2>&1
+                # 避免 shell 提示 "Terminated" 信息
+                wait $tail_pid 2>/dev/null
+                
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
                 ;;
             5)
                 echo -e "${gl_huang}正在卸载...${gl_bai}"
@@ -968,7 +985,7 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.7 (Nftables Manager)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.8 (Nftables Manager)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
