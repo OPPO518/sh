@@ -80,6 +80,180 @@ current_timezone() {
     fi
 }
 
+# ===== 功能模块: 系统初始化 (融合增强版) =====
+system_initialize() {
+    clear
+    echo -e "${gl_kjlan}################################################"
+    echo -e "#           系统初始化配置 (System Init)       #"
+    echo -e "################################################${gl_bai}"
+    
+    # 1. 自动检测系统版本
+    local os_ver=""
+    if grep -q "bullseye" /etc/os-release; then
+        os_ver="11"
+        echo -e "当前系统: ${gl_huang}Debian 11 (Bullseye)${gl_bai}"
+    elif grep -q "bookworm" /etc/os-release; then
+        os_ver="12"
+        echo -e "当前系统: ${gl_huang}Debian 12 (Bookworm)${gl_bai}"
+    else
+        echo -e "${gl_hong}错误: 本脚本仅支持 Debian 11 或 12 系统！${gl_bai}"
+        read -p "按回车键返回..."
+        return
+    fi
+    
+    # [移到这里] 功能说明显示在系统版本下方
+    echo -e "${gl_hui}* 包含换源、BBR、时区及落地/中转环境配置${gl_bai}"
+
+    # 2. 询问机器角色 (美化版)
+    echo -e "------------------------------------------------"
+    echo -e "请设定当前 VPS 的业务角色："
+    echo -e "${gl_lv} 1.${gl_bai} 落地机 (Landing)  -> [关闭转发 | 极简安全]"
+    echo -e "${gl_lv} 2.${gl_bai} 中转机 (Transit)  -> [开启转发 | 路由优化]"
+    echo -e "------------------------------------------------"
+    read -p "请输入选项 [1-2]: " role_choice
+
+    # 3. 执行核心逻辑
+    echo -e "${gl_kjlan}>>> 正在执行初始化，请稍候...${gl_bai}"
+
+    # --- 场景 A: Debian 11 + 落地机 ---
+    if [ "$os_ver" == "11" ] && [ "$role_choice" == "1" ]; then
+        # [备份与换源]
+        [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
+        cat > /etc/apt/sources.list << EOF
+deb http://deb.debian.org/debian bullseye main contrib non-free
+deb http://deb.debian.org/debian bullseye-updates main contrib non-free
+deb http://security.debian.org/debian-security bullseye-security main contrib non-free
+deb http://archive.debian.org/debian bullseye-backports main contrib non-free
+EOF
+        # [升级与安装]
+        export DEBIAN_FRONTEND=noninteractive
+        apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
+        apt install curl wget systemd-timesyncd socat cron rsync -y
+        # [内核参数: 落地机]
+        rm -f /etc/sysctl.d/99-vps-optimize.conf
+        cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.ip_forward = 0
+net.ipv6.conf.all.forwarding = 0
+net.netfilter.nf_conntrack_max = 1000000
+net.ipv4.icmp_echo_ignore_all = 0
+net.ipv6.icmp.echo_ignore_all = 0
+EOF
+        sysctl --system
+
+    # --- 场景 B: Debian 12 + 落地机 ---
+    elif [ "$os_ver" == "12" ] && [ "$role_choice" == "1" ]; then
+        # [换源]
+        [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
+        cat > /etc/apt/sources.list << EOF
+deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
+EOF
+        # [升级与安装]
+        export DEBIAN_FRONTEND=noninteractive
+        apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
+        apt install curl wget systemd-timesyncd socat cron rsync -y
+        # [内核参数: 落地机]
+        rm -f /etc/sysctl.d/99-vps-optimize.conf
+        cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.ip_forward = 0
+net.ipv6.conf.all.forwarding = 0
+net.netfilter.nf_conntrack_max = 1000000
+net.ipv4.icmp_echo_ignore_all = 0
+net.ipv6.icmp.echo_ignore_all = 0
+EOF
+        sysctl --system
+
+    # --- 场景 C: Debian 12 + 中转机 ---
+    elif [ "$os_ver" == "12" ] && [ "$role_choice" == "2" ]; then
+        # [换源]
+        [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
+        cat > /etc/apt/sources.list << EOF
+deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware
+EOF
+        # [升级与安装]
+        export DEBIAN_FRONTEND=noninteractive
+        apt update && apt upgrade -y -o Dpkg::Options::="--force-confold" --ignore-missing
+        apt install curl wget systemd-timesyncd rsync socat -y
+        # [内核参数: 中转机]
+        rm -f /etc/sysctl.d/99-vps-optimize.conf
+        cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.default.forwarding = 1
+net.ipv4.icmp_echo_ignore_all = 0
+net.ipv6.icmp.echo_ignore_all = 0
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+EOF
+        sysctl --system
+
+    else
+        echo -e "${gl_hong}警告: 不支持的组合 (如 Debian 11 + 中转)，操作已取消。${gl_bai}"
+        read -p "按回车键返回..."
+        return
+    fi
+
+    # 4. 通用收尾
+    timedatectl set-timezone Asia/Shanghai
+    systemctl enable --now systemd-timesyncd
+
+    # 5. 详细结果反馈报告
+    echo -e ""
+    echo -e "${gl_lv}====== 初始化配置报告 (Init Report) ======${gl_bai}"
+    
+    # [检查 BBR]
+    local bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control)
+    echo -e " 1. BBR 算法: \t${gl_kjlan}${bbr_status}${gl_bai}"
+    
+    # [检查 转发状态]
+    local fw_status=$(sysctl -n net.ipv4.ip_forward)
+    if [ "$fw_status" == "1" ]; then
+        echo -e " 2. 内核转发: \t${gl_huang}已开启 (中转模式)${gl_bai}"
+    else
+        echo -e " 2. 内核转发: \t${gl_lv}已关闭 (落地模式)${gl_bai}"
+    fi
+
+    # [检查 时间]
+    local current_time=$(date "+%Y-%m-%d %H:%M:%S")
+    echo -e " 3. 当前时间: \t${gl_bai}${current_time} (CST)${gl_bai}"
+
+    echo -e "------------------------------------------------"
+
+    # 6. 重启检测逻辑
+    if [ -f /var/run/reboot-required ]; then
+        echo -e "${gl_hong}!!! 警告: 检测到内核或系统组件更新，必须重启生效 !!!${gl_bai}"
+        echo -e "${gl_hong}!!! Pending Kernel Update Detected !!!${gl_bai}"
+        echo -e "------------------------------------------------"
+        read -p " 是否立即重启 VPS ? (y/n) [默认 y]: " reboot_choice
+        reboot_choice=${reboot_choice:-y}
+        if [[ "$reboot_choice" =~ ^[yY]$ ]]; then
+            echo -e "${gl_lv}正在执行重启...${gl_bai}"
+            reboot
+        else
+            echo -e "${gl_huang}已跳过重启。请务必稍后手动重启！${gl_bai}"
+            read -p "按回车键返回主菜单..."
+        fi
+    else
+        echo -e "${gl_lv}>> 系统状态健康，无需重启。${gl_bai}"
+        read -p "按回车键返回主菜单..."
+    fi
+}
+
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
     clear
@@ -236,44 +410,48 @@ main_menu() {
         clear
         echo -e "${gl_kjlan}################################################"
         echo -e "#                                              #"
-        echo -e "#            Linux 简易运维工具箱              #"
+        echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.0 (本地精简版)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.3 (Optimization UI)${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 2.${gl_bai} 系统更新 (System Update)"
-        echo -e "${gl_lv} 3.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_kjlan} 4.${gl_bai} 更新脚本 (Update Script)"
+        echo -e "${gl_lv} 2.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 3.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 4.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
+        echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
         echo -e "------------------------------------------------"
         
-        read -p " 请输入选项 [0-4]: " choice
+        read -p " 请输入选项 [0-9]: " choice
 
         case "$choice" in
             1)
+                system_initialize
+                ;;
+            2)
                 linux_info
                 break_end
                 ;;
-            2)
+            3)
                 linux_update
                 break_end
                 ;;
-            3)
+            4)
                 linux_clean
                 break_end
                 ;;
-            4)
-                update_script  # 这里调用我们刚才写的更新函数
+            9)
+                update_script
                 ;;
             0)
-                echo -e "${gl_lv}感谢使用，再见！${gl_bai}"
+                echo -e "${gl_lv}再见！${gl_bai}"
                 exit 0
                 ;;
             *)
-                echo -e "${gl_hong}无效的选项，请重新输入！${gl_bai}"
+                echo -e "${gl_hong}无效的选项！${gl_bai}"
                 sleep 1
                 ;;
         esac
