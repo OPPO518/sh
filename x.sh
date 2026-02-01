@@ -109,8 +109,14 @@ system_initialize() {
     echo -e "请设定当前 VPS 的业务角色："
     echo -e "${gl_lv} 1.${gl_bai} 落地机 (Landing)  -> [关闭转发 | 极简安全]"
     echo -e "${gl_lv} 2.${gl_bai} 中转机 (Transit)  -> [开启转发 | 路由优化]"
+    echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
     echo -e "------------------------------------------------"
-    read -p "请输入选项 [1-2]: " role_choice
+    read -p "请输入选项 [0-2]: " role_choice
+
+    # 处理返回逻辑
+    if [ "$role_choice" == "0" ]; then
+        return
+    fi
 
     # 3. 执行核心逻辑
     echo -e "${gl_kjlan}>>> 正在执行初始化，请稍候...${gl_bai}"
