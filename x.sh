@@ -940,24 +940,43 @@ xray_management() {
         read -p "按回车继续..."
     }
 
-    # --- 动作: 初始化配置 (FHS路径 + 密钥保存) ---
+    # --- 动作: 初始化配置 (适配 v26 特殊输出版) ---
     configure_reality() {
-        if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
+        [ ! -f "/usr/local/bin/xray" ] && { echo "请先安装 Xray"; sleep 1; return; }
         ensure_port_open
         echo -e "${gl_huang}正在生成配置...${gl_bai}"
         
-        # 生成凭据
-        local uuid=$($BIN_PATH uuid)
-        local kp=$($BIN_PATH x25519)
-        local pri=$(echo "$kp" | grep "Private key" | cut -d: -f2 | tr -d '[:space:]')
-        local pub=$(echo "$kp" | grep "Public key" | cut -d: -f2 | tr -d '[:space:]')
+        # 1. 生成 UUID
+        local uuid=$(/usr/local/bin/xray uuid)
+        
+        # 2. 生成密钥 (Capture output)
+        local kp=$(/usr/local/bin/xray x25519)
+        
+        # 3. 智能抓取密钥 (兼容标准版和特殊版)
+        # 先抓私钥 (PrivateKey 或 Private key)
+        local pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
+        
+        # 再抓公钥 (优先抓 Public key，抓不到就抓 Password)
+        local pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
+        if [ -z "$pub" ]; then
+            # 如果没抓到 Public，尝试抓 Password (针对你现在的版本)
+            pub=$(echo "$kp" | grep -i "Password" | cut -d: -f2 | tr -d '[:space:]')
+        fi
+        
+        # 4. 生成 ShortId (8位字符)
         local sid=$(openssl rand -hex 4)
         
-        if [ -z "$pub" ]; then echo -e "${gl_hong}密钥生成失败!${gl_bai}"; return; fi
+        # 5. 最终检查
+        if [ -z "$pub" ]; then 
+            echo -e "${gl_hong}无法识别密钥格式！${gl_bai}"
+            echo -e "原始输出: \n$kp"
+            read -p "按回车返回..."
+            return 
+        fi
         
-        # 写入标准配置文件
-        mkdir -p $CONF_DIR
-        cat > $CONF_FILE << EOF
+        # 写入 config.json
+        mkdir -p /usr/local/etc/xray
+        cat > /usr/local/etc/xray/config.json << EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
@@ -978,13 +997,12 @@ xray_management() {
   "routing": { "domainStrategy": "IPIfNonMatch", "rules": [ { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" } ] }
 }
 EOF
-        # 关键: 保存公钥到单独文件，用于后续查看
-        echo "$pub" > $PUB_KEY_FILE
+        # 保存公钥用于查看
+        echo "$pub" > /usr/local/etc/xray/.public.key
         
-        # 重启服务
         systemctl restart xray
         
-        # 立即展示
+        # 直接调用查看功能
         view_config_action
     }
 
