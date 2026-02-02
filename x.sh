@@ -884,130 +884,104 @@ EOF
     done
 }
 
-# ===== 功能模块: Xray 核心管理 (硬核直连版) =====
+# ===== 功能模块: Xray 核心管理 (独立修正版) =====
 xray_management() {
     
+    # --- 内部函数: 获取国旗 Emoji (局部定义，防依赖缺失) ---
+    get_flag_local() {
+        case "$1" in
+            CN) echo "🇨🇳" ;; HK) echo "🇭🇰" ;; MO) echo "🇲🇴" ;; TW) echo "🇹🇼" ;;
+            US) echo "🇺🇸" ;; JP) echo "🇯🇵" ;; KR) echo "🇰🇷" ;; SG) echo "🇸🇬" ;;
+            RU) echo "🇷🇺" ;; DE) echo "🇩🇪" ;; GB) echo "🇬🇧" ;; FR) echo "🇫🇷" ;;
+            NL) echo "🇳🇱" ;; CA) echo "🇨🇦" ;; AU) echo "🇦🇺" ;; IN) echo "🇮🇳" ;;
+            TH) echo "🇹🇭" ;; VN) echo "🇻🇳" ;; MY) echo "🇲🇾" ;; ID) echo "🇮🇩" ;;
+            BR) echo "🇧🇷" ;; ZA) echo "🇿🇦" ;; IT) echo "🇮🇹" ;; ES) echo "🇪🇸" ;;
+            *) echo "🌐" ;; 
+        esac
+    }
+
     # --- 内部函数: 自动放行端口 ---
     ensure_port_open() {
         if command -v nft &>/dev/null; then
+            # 智能识别当前防火墙表名
             if nft list tables | grep -q "my_landing"; then t="my_landing"; s="allowed_tcp"; su="allowed_udp";
             elif nft list tables | grep -q "my_transit"; then t="my_transit"; s="local_tcp"; su="local_udp"; else return; fi
+            
+            # 检查并放行
             if ! nft list set inet $t $s 2>/dev/null | grep -q "52368"; then
                 echo -e "${gl_huang}自动放行端口 52368...${gl_bai}"
-                nft add element inet $t $s { 52368 }; nft add element inet $t $su { 52368 }; nft list ruleset > /etc/nftables.conf
+                nft add element inet $t $s { 52368 }
+                nft add element inet $t $su { 52368 }
+                nft list ruleset > /etc/nftables.conf
             fi
         fi
     }
 
     # --- 内部函数: 强制安装 (手动下载解压) ---
     install_xray() {
-        echo -e "${gl_huang}正在下载 Xray-core (直连 GitHub)...${gl_bai}"
+        echo -e "${gl_huang}正在下载 Xray-core (直连 GitHub v1.8.24)...${gl_bai}"
         
-        # 1. 架构检测与地址定义
-        local arch=$(uname -m)
-        local download_url=""
-        local ver="v1.8.24" # 指定一个绝对稳的经典版本
-        
-        if [[ "$arch" == "x86_64" ]]; then
-            download_url="https://github.com/XTLS/Xray-core/releases/download/${ver}/Xray-linux-64.zip"
-        elif [[ "$arch" == "aarch64" ]]; then
-            download_url="https://github.com/XTLS/Xray-core/releases/download/${ver}/Xray-linux-arm64-v8a.zip"
-        else
-            echo -e "${gl_hong}不支持的架构: $arch${gl_bai}"; return
-        fi
-
-        # 2. 清理旧环境 (以防万一)
+        # 1. 准备环境
         systemctl stop xray 2>/dev/null
         rm -f /usr/local/bin/xray
         rm -rf /usr/local/share/xray
         mkdir -p /usr/local/share/xray
-
-        # 3. 下载依赖
         apt update && apt install unzip curl -y
         
-        echo -e "${gl_kjlan}正在下载二进制包...${gl_bai}"
-        curl -L -o /tmp/xray.zip "$download_url"
-        
-        # 验证文件是否存在
-        if [ ! -s "/tmp/xray.zip" ]; then
-             echo -e "${gl_hong}下载失败！文件为空或网络不通。${gl_bai}"
-             read -p "..."
-             return
+        # 2. 下载
+        local arch=$(uname -m)
+        local url=""
+        if [[ "$arch" == "x86_64" ]]; then
+            url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip"
+        elif [[ "$arch" == "aarch64" ]]; then
+            url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-arm64-v8a.zip"
+        else
+            echo -e "${gl_hong}不支持架构: $arch${gl_bai}"; return
         fi
-
-        echo "正在解压..."
+        
+        curl -L -o /tmp/xray.zip "$url"
+        if [ ! -s "/tmp/xray.zip" ]; then echo -e "${gl_hong}下载失败!${gl_bai}"; return; fi
+        
+        # 3. 解压安装
         unzip -o /tmp/xray.zip -d /tmp/xray_dist
-        
-        # 4. 部署文件
-        mv -f /tmp/xray_dist/xray /usr/local/bin/xray
-        chmod +x /usr/local/bin/xray
-        
-        # 部署资源文件 (geoip/geosite)
+        mv -f /tmp/xray_dist/xray /usr/local/bin/xray; chmod +x /usr/local/bin/xray
         mv -f /tmp/xray_dist/geoip.dat /usr/local/share/xray/
         mv -f /tmp/xray_dist/geosite.dat /usr/local/share/xray/
         
-        # 5. 写入 Systemd 服务文件 (手动接管)
+        # 4. 配置服务
         cat > /etc/systemd/system/xray.service << EOF
 [Unit]
 Description=Xray Service
-Documentation=https://github.com/xtls
-After=network.target nss-lookup.target
-
+After=network.target
 [Service]
-User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-NoNewPrivileges=true
 ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
 Restart=on-failure
-RestartPreventExitStatus=23
-LimitNPROC=10000
-LimitNOFILE=1000000
-
 [Install]
 WantedBy=multi-user.target
 EOF
-        
-        # 6. 收尾
         mkdir -p /usr/local/etc/xray
         rm -rf /tmp/xray.zip /tmp/xray_dist
-        systemctl daemon-reload
-        systemctl enable xray
+        systemctl daemon-reload; systemctl enable xray
         
-        echo -e "${gl_lv}Xray (手动模式) 安装成功！${gl_bai}"
-        /usr/local/bin/xray version | head -n 1
-        read -p "按回车继续..."
+        echo -e "${gl_lv}安装成功!${gl_bai}"; read -p "按回车继续..."
     }
 
-    # --- 内部函数: 配置 Reality ---
+    # --- 内部函数: 配置 Reality (带国旗识别) ---
     configure_reality() {
-        # 强制检查二进制文件
-        if [ ! -f "/usr/local/bin/xray" ]; then
-             echo -e "${gl_hong}未找到 Xray 文件！请先执行选项 1。${gl_bai}"; sleep 1; return
-        fi
-        
+        [ ! -f "/usr/local/bin/xray" ] && { echo "请先安装 Xray"; sleep 1; return; }
         ensure_port_open
-        echo -e "${gl_huang}正在生成凭据...${gl_bai}"
+        echo -e "${gl_huang}正在生成配置...${gl_bai}"
         
-        # 1. 调用 Xray 生成
-        # 使用绝对路径，确保调用的就是我们刚下载的那个
+        # 生成凭据 (暴力抓取)
         local uuid=$(/usr/local/bin/xray uuid)
         local kp=$(/usr/local/bin/xray x25519)
-        
-        # 2. 暴力抓取 (Cut + Tr 删除空白)
         local pri=$(echo "$kp" | grep "Private key" | cut -d: -f2 | tr -d '[:space:]')
         local pub=$(echo "$kp" | grep "Public key" | cut -d: -f2 | tr -d '[:space:]')
         local sid=$(openssl rand -hex 4)
         
-        # 3. 终极校验
-        if [ -z "$pub" ]; then
-             echo -e "${gl_hong}生成失败！原始输出如下:${gl_bai}"
-             echo "$kp"
-             read -p "..."
-             return
-        fi
-
-        # 4. 写入配置
+        [ -z "$pub" ] && { echo "生成失败: $kp"; read -p "..."; return; }
+        
+        # 写入配置 (紧凑版)
         cat > /usr/local/etc/xray/config.json << EOF
 {
   "log": { "loglevel": "warning" },
@@ -1030,97 +1004,45 @@ EOF
 }
 EOF
         systemctl restart xray
-        local ip=$(curl -s https://ipinfo.io/ip)
+        
+        # 获取信息 & 国旗
+        echo -e "${gl_huang}正在查询归属地...${gl_bai}"
+        local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
+        local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
+        local flag=$(get_flag_local "$code")
         
         echo -e "------------------------------------------------"
-        echo -e "${gl_kjlan}Xray Reality 配置完成${gl_bai}"
-        echo -e "地址: ${gl_bai}$ip${gl_bai}"
-        echo -e "端口: ${gl_bai}52368${gl_bai}"
-        echo -e "UUID: ${gl_bai}$uuid${gl_bai}"
-        echo -e "Public Key: ${gl_bai}$pub${gl_bai}"
-        echo -e "Short ID:   ${gl_bai}$sid${gl_bai}"
+        echo -e "地址: $ip"
+        echo -e "地区: $code $flag"
+        echo -e "端口: 52368"
+        echo -e "UUID: $uuid"
+        echo -e "公钥: $pub"
+        echo -e "SID:  $sid"
         echo -e "------------------------------------------------"
-        echo -e "链接: ${gl_lv}vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#Xray-Reality${gl_bai}"
-        echo -e "------------------------------------------------"
+        echo -e "链接: ${gl_lv}vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality${gl_bai}"
         read -p "按回车继续..."
     }
-    
-    # --- 卸载 ---
-    uninstall_xray() {
-        systemctl stop xray
-        systemctl disable xray
-        rm -f /etc/systemd/system/xray.service
-        rm -f /usr/local/bin/xray
-        rm -rf /usr/local/etc/xray
-        rm -rf /usr/local/share/xray
-        systemctl daemon-reload
-        echo -e "${gl_lv}已卸载${gl_bai}"; read -p "..."
-    }
-
-    while true; do
-        clear
-        echo -e "${gl_kjlan}Xray 管理 (Manual Install Mode)${gl_bai}"
-        if systemctl is-active --quiet xray; then echo -e "状态: ${gl_lv}运行中${gl_bai}"; else echo -e "状态: ${gl_hong}停止${gl_bai}"; fi
-        echo "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 手动下载安装 (Install)"
-        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Config)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_huang} 3.${gl_bai} 查看日志"
-        echo -e "${gl_huang} 4.${gl_bai} 重启服务"
-        echo -e "${gl_huang} 5.${gl_bai} 停止服务"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_hong} 6.${gl_bai} 卸载 Xray"
-        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
-        echo -e "------------------------------------------------"
-        read -p "选项: " c
-        case "$c" in
-            1) install_xray ;;
-            2) configure_reality ;;
-            3) echo "回车退出..."; journalctl -u xray -n 20 -f & pid=$!; read -r; kill $pid ;;
-            4) systemctl restart xray; echo "已重启"; sleep 1 ;;
-            5) systemctl stop xray; echo "已停止"; sleep 1 ;;
-            6) uninstall_xray ;;
-            0) return ;;
-        esac
-    done
-}
 
     # --- 模块主循环 ---
     while true; do
         clear
-        echo -e "${gl_kjlan}################################################"
-        echo -e "#           Xray 核心服务管理 (Reality)        #"
-        echo -e "################################################${gl_bai}"
-        
-        if systemctl is-active --quiet xray; then
-            echo -e "状态: ${gl_lv}运行中 (Running)${gl_bai}"
-        else
-            echo -e "状态: ${gl_hong}停止 / 未安装${gl_bai}"
-        fi
-        
-        echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装/修复 (Install/Fix)"
-        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Generate Config)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_huang} 3.${gl_bai} 查看日志 (Logs)"
-        echo -e "${gl_huang} 4.${gl_bai} 重启服务 (Restart)"
-        echo -e "${gl_huang} 5.${gl_bai} 停止服务 (Stop)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_hong} 6.${gl_bai} 卸载 Xray (Uninstall)"
-        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
-        echo -e "------------------------------------------------"
-        
-        read -p "请输入选项: " choice
-
-        case "$choice" in
+        echo -e "${gl_kjlan}Xray 管理 (Manual Mode)${gl_bai}"
+        if systemctl is-active --quiet xray; then echo -e "状态: ${gl_lv}运行中${gl_bai}"; else echo -e "状态: ${gl_hong}停止${gl_bai}"; fi
+        echo "------------------------------------------------"
+        echo " 1. 手动下载安装 (Install)"
+        echo " 2. 初始化配置 (Config)"
+        echo " 3. 查看日志"
+        echo " 4. 重启/停止"
+        echo " 5. 卸载"
+        echo " 0. 返回"
+        read -p "选项: " c
+        case "$c" in
             1) install_xray ;;
             2) configure_reality ;;
-            3) echo "按回车退出..."; journalctl -u xray -n 20 -f & pid=$!; read -r; kill $pid ;;
+            3) journalctl -u xray -n 20 -f ;;
             4) systemctl restart xray; echo "已重启"; sleep 1 ;;
-            5) systemctl stop xray; echo "已停止"; sleep 1 ;;
-            6) uninstall_xray ;;
+            5) systemctl stop xray; systemctl disable xray; rm -f /usr/local/bin/xray; echo "已卸载"; read -p "..." ;;
             0) return ;;
-            *) echo "无效选项" ;;
         esac
     done
 }
