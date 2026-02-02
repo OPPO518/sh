@@ -1335,7 +1335,7 @@ main_menu() {
         clear
         echo -e "${gl_kjlan}################################################"
         echo -e "#                                              #"
-        echo -e "#            Debian VPS 极简运维工具箱          #"
+        echo -e "#            Debian VPS 极简运维工具箱         #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
         echo -e "${gl_huang}当前版本: 1.66 (Final Release)${gl_bai}"
