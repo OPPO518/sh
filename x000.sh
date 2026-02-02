@@ -884,47 +884,48 @@ EOF
     done
 }
 
-# ===== 功能模块: Xray 核心管理 (官方脚本 + 紧凑配置) =====
+# ===== 功能模块: Xray 核心管理 (最终稳定版) =====
 xray_management() {
     
     # --- 内部函数: 自动放行 Nftables 端口 ---
     ensure_port_open() {
-        local port="$1"
+        # 如果系统里没有 nft 命令，或者没有初始化过防火墙，直接跳过
         if ! command -v nft &>/dev/null; then return; fi
         
         local table=""
         local set_tcp=""
         local set_udp=""
 
-        if nft list tables | grep -q "my_transit"; then
-            table="my_transit"; set_tcp="local_tcp"; set_udp="local_udp"
-        elif nft list tables | grep -q "my_landing"; then
+        # 智能识别当前防火墙模式
+        if nft list tables | grep -q "my_landing"; then
             table="my_landing"; set_tcp="allowed_tcp"; set_udp="allowed_udp"
+        elif nft list tables | grep -q "my_transit"; then
+            table="my_transit"; set_tcp="local_tcp"; set_udp="local_udp"
         else
             return
         fi
 
-        if ! nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
-            echo -e "端口 $port: ${gl_huang}防火墙未放行，正在自动添加规则...${gl_bai}"
-            nft add element inet $table $set_tcp { $port }
-            nft add element inet $table $set_udp { $port }
+        # 检查 52368 是否已放行，没有则添加
+        if ! nft list set inet $table $set_tcp 2>/dev/null | grep -q "52368"; then
+            echo -e "${gl_huang}正在自动放行端口 52368...${gl_bai}"
+            nft add element inet $table $set_tcp { 52368 }
+            nft add element inet $table $set_udp { 52368 }
             nft list ruleset > /etc/nftables.conf
-            echo -e "${gl_lv}端口 $port 已自动放行。${gl_bai}"
+            echo -e "${gl_lv}防火墙规则已更新。${gl_bai}"
         fi
     }
 
-    # --- 内部函数: 安装/升级 Xray ---
+    # --- 内部函数: 安装/修复 Xray ---
     install_xray() {
-        echo -e "${gl_huang}正在调用官方脚本安装/升级 Xray...${gl_bai}"
+        echo -e "${gl_huang}正在调用官方脚本安装/修复 Xray...${gl_bai}"
+        # 强制重装模式，确保二进制文件完整
         bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
         
         if [ $? -eq 0 ]; then
-            echo -e "${gl_lv}Xray 安装/升级成功！${gl_bai}"
+            echo -e "${gl_lv}Xray 安装成功！${gl_bai}"
             xray version | head -n 1
             echo -e "------------------------------------------------"
-            echo -e "${gl_huang}提示:${gl_bai}"
-            echo -e "如果是【首次安装】，请务必执行菜单 ${gl_lv}选项 2${gl_bai} 生成配置。"
-            echo -e "如果是【版本升级】，服务已自动重启，无需操作。"
+            echo -e "请继续执行 ${gl_lv}选项 2${gl_bai} 进行初始化配置。"
             echo -e "------------------------------------------------"
         else
             echo -e "${gl_hong}安装失败，请检查网络连接。${gl_bai}"
@@ -932,114 +933,106 @@ xray_management() {
         read -p "按回车继续..."
     }
 
-    # --- 内部函数: 配置 Reality (紧凑美学版) ---
+    # --- 内部函数: 配置 Reality (暴力抓取版) ---
     configure_reality() {
         if ! command -v xray &>/dev/null; then
-            echo -e "${gl_hong}请先安装 Xray！${gl_bai}"; sleep 1; return;
+            echo -e "${gl_hong}未检测到 Xray，请先执行选项 1 安装！${gl_bai}"
+            sleep 1; return
         fi
 
-        # 1. 自动处理防火墙
-        ensure_port_open "52368"
-
-        echo -e "${gl_huang}正在生成 Xray 配置文件 (UUID/Keys)...${gl_bai}"
-
-        # 2. 生成凭据
+        ensure_port_open
+        
+        echo -e "${gl_huang}正在生成凭据...${gl_bai}"
+        
+        # 1. 生成 UUID
         local uuid=$(xray uuid)
-        local key_pair=$(xray x25519)
-        # 修复公钥抓取逻辑
-        local private_key=$(echo "$key_pair" | grep "Private key" | awk '{print $NF}')
-        local public_key=$(echo "$key_pair" | grep "Public key" | awk '{print $NF}')
-        local short_id=$(openssl rand -hex 4)
-        local dest_server="www.microsoft.com:443"
-        local server_name="www.microsoft.com"
+        
+        # 2. 生成密钥对 (保存到变量)
+        local kp=$(xray x25519)
+        
+        # [Debug] 密钥为空检测
+        if [ -z "$kp" ]; then
+            echo -e "${gl_hong}严重错误: xray x25519 命令没有任何输出！${gl_bai}"
+            echo -e "可能原因: Xray 二进制文件损坏或架构不对。"
+            echo -e "建议: 请先执行选项 1 强制重装。"
+            read -p "按回车返回..."
+            return
+        fi
 
-        # 3. 写入配置文件 (紧凑模式)
-        # 注意：这里我们直接按照你想要的格式排版，不需要 jq
+        # 3. [核心逻辑] 暴力抓取密钥 (不依赖空格，只认冒号，删除所有空白符)
+        local pri=$(echo "$kp" | grep "Private key" | cut -d: -f2 | tr -d '[:space:]')
+        local pub=$(echo "$kp" | grep "Public key" | cut -d: -f2 | tr -d '[:space:]')
+        local sid=$(openssl rand -hex 4)
+        
+        # [Debug] 抓取失败检测
+        if [ -z "$pub" ]; then
+            echo -e "${gl_hong}抓取失败！无法提取 Public Key。${gl_bai}"
+            echo -e "原始输出如下 (请截图给开发者):"
+            echo -e "${gl_hui}$kp${gl_bai}"
+            echo -e "------------------------"
+            read -p "按回车返回..."
+            return
+        fi
+
+        # 4. 写入配置 (紧凑格式)
         cat > /usr/local/etc/xray/config.json << EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "port": 52368,
-      "protocol": "vless",
-      "settings": {
-        "clients": [ { "id": "$uuid", "flow": "xtls-rprx-vision" } ],
-        "decryption": "none"
-      },
+      "port": 52368, "protocol": "vless",
+      "settings": { "clients": [ { "id": "$uuid", "flow": "xtls-rprx-vision" } ], "decryption": "none" },
       "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
+        "network": "tcp", "security": "reality",
         "realitySettings": {
-          "dest": "$dest_server",
-          "serverNames": [ "$server_name", "microsoft.com" ],
-          "privateKey": "$private_key",
-          "shortIds": [ "$short_id" ]
+          "dest": "www.microsoft.com:443", "serverNames": [ "www.microsoft.com", "microsoft.com" ],
+          "privateKey": "$pri", "shortIds": [ "$sid" ]
         }
       },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [ "http", "tls", "quic" ]
-      }
+      "sniffing": { "enabled": true, "destOverride": [ "http", "tls", "quic" ] }
     }
   ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "block" }
-  ],
-  "routing": {
-    "domainStrategy": "IPIfNonMatch",
-    "rules": [
-      { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" }
-    ]
-  }
+  "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "block" } ],
+  "routing": { "domainStrategy": "IPIfNonMatch", "rules": [ { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" } ] }
 }
 EOF
 
-        # 4. 重启服务
+        # 5. 重启并验证
         systemctl restart xray
         
-        # 5. 检查状态
+        # 获取本机 IP
+        local current_ip=$(curl -s https://ipinfo.io/ip)
+        
         if systemctl is-active --quiet xray; then
-            echo -e "${gl_lv}配置已应用！服务已启动。${gl_bai}"
-            
-            local current_ip=$(curl -s https://ipinfo.io/ip)
-            if [ -z "$current_ip" ]; then current_ip="你的IP地址"; fi
-            
-            local link="vless://$uuid@$current_ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#Xray-Reality"
-            
-            echo -e "------------------------------------------------"
-            echo -e "${gl_kjlan}>>> 客户端连接信息 (Xray-Reality-Vision) <<<${gl_bai}"
-            echo -e "地址 (Address): ${gl_bai}$current_ip${gl_bai}"
-            echo -e "端口 (Port):    ${gl_bai}52368${gl_bai}"
-            echo -e "用户ID (UUID):  ${gl_bai}$uuid${gl_bai}"
-            echo -e "公钥 (Public):  ${gl_bai}$public_key${gl_bai}"
-            echo -e "Short ID:       ${gl_bai}$short_id${gl_bai}"
-            echo -e "------------------------------------------------"
-            echo -e "${gl_huang}快速导入链接:${gl_bai}"
-            echo -e "${gl_lv}$link${gl_bai}"
-            echo -e "------------------------------------------------"
+             echo -e "------------------------------------------------"
+             echo -e "${gl_kjlan}Xray Reality 配置完成${gl_bai}"
+             echo -e "地址: ${gl_bai}$current_ip${gl_bai}"
+             echo -e "端口: ${gl_bai}52368${gl_bai}"
+             echo -e "UUID: ${gl_bai}$uuid${gl_bai}"
+             echo -e "Public Key: ${gl_bai}$pub${gl_bai}"
+             echo -e "Short ID:   ${gl_bai}$sid${gl_bai}"
+             echo -e "------------------------------------------------"
+             echo -e "链接: ${gl_lv}vless://$uuid@$current_ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#Xray-Reality${gl_bai}"
+             echo -e "------------------------------------------------"
         else
-            echo -e "${gl_hong}服务启动失败！${gl_bai}"
-            echo -e "请运行此命令查看日志: journalctl -u xray -n 20 --no-pager"
+             echo -e "${gl_hong}服务启动失败！${gl_bai}"
+             echo -e "请运行: journalctl -u xray -n 20 --no-pager 查看原因"
         fi
         read -p "按回车继续..."
     }
 
     # --- 内部函数: 卸载 Xray ---
     uninstall_xray() {
-        echo -e "${gl_hong}警告: 这将完全删除 Xray 程序和配置文件！${gl_bai}"
-        read -p "确定要卸载吗？(y/n): " confirm
+        echo -e "${gl_hong}警告: 这将完全删除 Xray 程序和配置！${gl_bai}"
+        read -p "确定? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then
-            echo -e "${gl_huang}正在调用官方脚本卸载...${gl_bai}"
             bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove
-            echo -e "${gl_lv}Xray 已卸载。${gl_bai}"
-        else
-            echo "已取消。"
+            echo -e "${gl_lv}已卸载。${gl_bai}"
         fi
         read -p "按回车继续..."
     }
 
-    # --- 菜单循环 ---
+    # --- 模块主循环 ---
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
@@ -1047,21 +1040,16 @@ EOF
         echo -e "################################################${gl_bai}"
         
         if systemctl is-active --quiet xray; then
-            local ver=$(xray version | head -n 1 | awk '{print $2}')
-            echo -e "当前状态: ${gl_lv}运行中${gl_bai} (版本: $ver)"
+            echo -e "状态: ${gl_lv}运行中 (Running)${gl_bai}"
         else
-            if command -v xray &>/dev/null; then
-                echo -e "当前状态: ${gl_hong}已停止${gl_bai} (已安装)"
-            else
-                echo -e "当前状态: ${gl_hong}未安装${gl_bai}"
-            fi
+            echo -e "状态: ${gl_hong}停止 / 未安装${gl_bai}"
         fi
         
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Xray (Official Script)"
-        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (VLESS-Reality-Vision)"
+        echo -e "${gl_lv} 1.${gl_bai} 安装/修复 (Install/Fix)"
+        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Generate Config)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_huang} 3.${gl_bai} 查看运行日志 (View Log)"
+        echo -e "${gl_huang} 3.${gl_bai} 查看日志 (Logs)"
         echo -e "${gl_huang} 4.${gl_bai} 重启服务 (Restart)"
         echo -e "${gl_huang} 5.${gl_bai} 停止服务 (Stop)"
         echo -e "------------------------------------------------"
@@ -1074,24 +1062,9 @@ EOF
         case "$choice" in
             1) install_xray ;;
             2) configure_reality ;;
-            3)
-                echo -e "${gl_huang}正在显示最后 20 条日志 (按 回车键 退出)...${gl_bai}"
-                journalctl -u xray -n 20 -f &
-                local tail_pid=$!
-                read -r
-                kill $tail_pid >/dev/null 2>&1
-                wait $tail_pid 2>/dev/null
-                ;;
-            4) 
-                systemctl restart xray
-                echo -e "${gl_lv}已重启${gl_bai}"
-                sleep 1
-                ;;
-            5)
-                systemctl stop xray
-                echo -e "${gl_hong}已停止${gl_bai}"
-                sleep 1
-                ;;
+            3) echo "按回车退出..."; journalctl -u xray -n 20 -f & pid=$!; read -r; kill $pid ;;
+            4) systemctl restart xray; echo "已重启"; sleep 1 ;;
+            5) systemctl stop xray; echo "已停止"; sleep 1 ;;
             6) uninstall_xray ;;
             0) return ;;
             *) echo "无效选项" ;;
