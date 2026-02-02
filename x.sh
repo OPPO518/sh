@@ -964,7 +964,7 @@ xray_management() {
         fi
         
         # 4. 生成 ShortId (8位字符)
-        local sid=$(openssl rand -hex 4)
+        local sid=$(openssl rand -hex 8)
         
         # 5. 最终检查
         if [ -z "$pub" ]; then 
@@ -1279,7 +1279,7 @@ main_menu() {
         echo -e "#            Debian VPS 极简运维工具箱         #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.63 (Final Release)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.64 (Final Release)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
