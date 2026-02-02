@@ -80,7 +80,7 @@ current_timezone() {
     fi
 }
 
-# ===== 功能模块: 系统初始化 (融合增强版) =====
+# ===== 功能模块1: 系统初始化 (融合增强版) =====
 system_initialize() {
     clear
     echo -e "${gl_kjlan}################################################"
@@ -287,7 +287,7 @@ EOF
     fi
 }
 
-# ===== 功能模块: Swap 虚拟内存管理 =====
+# ===== 功能模块2: Swap 虚拟内存管理 =====
 swap_management() {
     while true; do
         clear
@@ -363,7 +363,7 @@ swap_management() {
     done
 }
 
-# ===== 功能模块: Nftables 防火墙管理 (核心) =====
+# ===== 功能模块3.1: Nftables 防火墙管理 (核心) =====
 nftables_management() {
     # --- 内部函数: 自动检测 SSH 端口 (防自锁核心) ---
     detect_ssh_port() {
@@ -722,7 +722,7 @@ EOF
     done
 }
 
-# ===== 功能模块: Fail2ban 防爆破管理 =====
+# ===== 功能模块3.2: Fail2ban 防爆破管理 =====
 fail2ban_management() {
     # --- 内部函数: 检测 SSH 端口 ---
     detect_ssh_port() {
@@ -884,7 +884,7 @@ EOF
     done
 }
 
-# ===== 功能模块: Sing-box 核心管理 (Deb包 + 防覆盖 + 自动防火墙) =====
+# ===== 功能模块4: Sing-box 核心管理 (Deb包 + 防覆盖 + 自动防火墙) =====
 singbox_management() {
     # --- 内部函数: 获取最新版本 ---
     get_latest_version() {
@@ -1126,7 +1126,7 @@ EOF
         
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Sing-box (Install/Update)"
-        echo -e "${gl_lv} 2.${gl_bai} 配置为: 落地/通用服务端 (VLESS-Reality)"
+        echo -e "${gl_lv} 2.${gl_bai} 配置通用服务端 (VLESS-Reality)"
         echo -e "------------------------------------------------"
         echo -e "${gl_huang} 3.${gl_bai} 检查配置语法 (Check Config)"
         echo -e "${gl_huang} 4.${gl_bai} 查看运行日志 (View Log)"
@@ -1176,7 +1176,7 @@ EOF
     done
 }
 
-# ===== 功能 1: 系统信息查询 (已移除统计代码) =====
+# ===== 功能 5: 系统信息查询 (已移除统计代码) =====
 linux_info() {
     clear
     
@@ -1255,7 +1255,7 @@ linux_info() {
     echo
 }
 
-# ===== 功能 2: 系统更新 (Debian专用 + 重启检测) =====
+# ===== 功能 7: 系统更新 (Debian专用 + 重启检测) =====
 linux_update() {
     echo -e "${gl_huang}正在进行系统更新...${gl_bai}"
     if command -v apt &>/dev/null; then
@@ -1280,7 +1280,7 @@ linux_update() {
     fi
 }
 
-# ===== 功能 3: 系统清理 (Debian专用) =====
+# ===== 功能 8: 系统清理 (Debian专用) =====
 linux_clean() {
     echo -e "${gl_huang}正在进行系统清理...${gl_bai}"
     if command -v apt &>/dev/null; then
@@ -1304,7 +1304,7 @@ linux_clean() {
     echo -e "${gl_lv}清理完成！${gl_bai}"
 }
 
-# ===== 功能 4: 脚本更新 =====
+# ===== 功能 9: 脚本更新 =====
 update_script() {
     echo -e "${gl_huang}正在检查并更新脚本...${gl_bai}"
     # 这里的 URL 换成你自己的 GitHub Raw 地址
@@ -1338,18 +1338,18 @@ main_menu() {
         echo -e "#            Debian VPS 极简运维工具箱         #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.66 (Final Release)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.67 (Final Release)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
         echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
-        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Sing-box) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "${gl_kjlan} 5.${gl_bai} 核心代理服务 (Sing-box) ${gl_hong}[Reality]${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
-        echo -e "${gl_lv} 7.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_lv} 6.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 7.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 8.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
@@ -1362,10 +1362,10 @@ main_menu() {
             2) swap_management ;;
             3) nftables_management ;;
             4) fail2ban_management ;;
-            8) singbox_management ;;
-            5) linux_info; break_end ;;
-            6) linux_update; break_end ;;
-            7) linux_clean; break_end ;;
+            5) singbox_management ;;
+            6) linux_info; break_end ;;
+            7) linux_update; break_end ;;
+            8) linux_clean; break_end ;;
             9) update_script ;;
             0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
             *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
