@@ -1098,66 +1098,6 @@ EOF
         esac
     done
 }
-    # --- 菜单循环 ---
-    while true; do
-        clear
-        echo -e "${gl_kjlan}################################################"
-        echo -e "#           Xray 核心服务管理 (Reality)        #"
-        echo -e "################################################${gl_bai}"
-        
-        if systemctl is-active --quiet xray; then
-            local ver=$(xray version | head -n 1 | awk '{print $2}')
-            echo -e "当前状态: ${gl_lv}运行中${gl_bai} (版本: $ver)"
-        else
-            if command -v xray &>/dev/null; then
-                echo -e "当前状态: ${gl_hong}已停止${gl_bai} (已安装)"
-            else
-                echo -e "当前状态: ${gl_hong}未安装${gl_bai}"
-            fi
-        fi
-        
-        echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Xray (Official Script)"
-        # [修改] 如下：文案更纯粹，不再区分落地/中转
-        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (VLESS-Reality-Vision)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_huang} 3.${gl_bai} 查看运行日志 (View Log)"
-        echo -e "${gl_huang} 4.${gl_bai} 重启服务 (Restart)"
-        echo -e "${gl_huang} 5.${gl_bai} 停止服务 (Stop)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_hong} 6.${gl_bai} 卸载 Xray (Uninstall)"
-        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
-        echo -e "------------------------------------------------"
-        
-        read -p "请输入选项: " choice
-
-        case "$choice" in
-            1) install_xray ;;
-            2) configure_reality ;;
-            3)
-                echo -e "${gl_huang}正在显示最后 20 条日志 (按 回车键 退出)...${gl_bai}"
-                journalctl -u xray -n 20 -f &
-                local tail_pid=$!
-                read -r
-                kill $tail_pid >/dev/null 2>&1
-                wait $tail_pid 2>/dev/null
-                ;;
-            4) 
-                systemctl restart xray
-                echo -e "${gl_lv}已重启${gl_bai}"
-                sleep 1
-                ;;
-            5)
-                systemctl stop xray
-                echo -e "${gl_hong}已停止${gl_bai}"
-                sleep 1
-                ;;
-            6) uninstall_xray ;;
-            0) return ;;
-            *) echo "无效选项" ;;
-        esac
-    done
-}
 
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
