@@ -884,7 +884,7 @@ EOF
     done
 }
 
-# ===== 功能模块: Xray 核心管理 (官方脚本版) =====
+# ===== 功能模块: Xray 核心管理 (官方脚本 + 紧凑配置) =====
 xray_management() {
     
     # --- 内部函数: 自动放行 Nftables 端口 ---
@@ -892,7 +892,6 @@ xray_management() {
         local port="$1"
         if ! command -v nft &>/dev/null; then return; fi
         
-        # 保持静默检查，不刷屏
         local table=""
         local set_tcp=""
         local set_udp=""
@@ -902,7 +901,7 @@ xray_management() {
         elif nft list tables | grep -q "my_landing"; then
             table="my_landing"; set_tcp="allowed_tcp"; set_udp="allowed_udp"
         else
-            return # 无防火墙托管，直接跳过
+            return
         fi
 
         if ! nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
@@ -914,29 +913,26 @@ xray_management() {
         fi
     }
 
-    # --- 内部函数: 安装/升级 Xray (官方脚本) ---
+    # --- 内部函数: 安装/升级 Xray ---
     install_xray() {
         echo -e "${gl_huang}正在调用官方脚本安装/升级 Xray...${gl_bai}"
-        
-        # 调用官方脚本
         bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
         
         if [ $? -eq 0 ]; then
             echo -e "${gl_lv}Xray 安装/升级成功！${gl_bai}"
             xray version | head -n 1
-            
             echo -e "------------------------------------------------"
             echo -e "${gl_huang}提示:${gl_bai}"
             echo -e "如果是【首次安装】，请务必执行菜单 ${gl_lv}选项 2${gl_bai} 生成配置。"
             echo -e "如果是【版本升级】，服务已自动重启，无需操作。"
             echo -e "------------------------------------------------"
         else
-            echo -e "${gl_hong}安装失败，请检查网络连接 (GitHub连通性)。${gl_bai}"
+            echo -e "${gl_hong}安装失败，请检查网络连接。${gl_bai}"
         fi
         read -p "按回车继续..."
     }
 
-    # --- 内部函数: 配置 Reality (VLESS-Vision) ---
+    # --- 内部函数: 配置 Reality (紧凑美学版) ---
     configure_reality() {
         if ! command -v xray &>/dev/null; then
             echo -e "${gl_hong}请先安装 Xray！${gl_bai}"; sleep 1; return;
@@ -950,31 +946,24 @@ xray_management() {
         # 2. 生成凭据
         local uuid=$(xray uuid)
         local key_pair=$(xray x25519)
-        local private_key=$(echo "$key_pair" | grep "Private key:" | awk '{print $3}')
-        local public_key=$(echo "$key_pair" | grep "Public key:" | awk '{print $3}')
+        # 修复公钥抓取逻辑
+        local private_key=$(echo "$key_pair" | grep "Private key" | awk '{print $NF}')
+        local public_key=$(echo "$key_pair" | grep "Public key" | awk '{print $NF}')
         local short_id=$(openssl rand -hex 4)
-        
-        # 伪装目标 (Microsoft)
         local dest_server="www.microsoft.com:443"
         local server_name="www.microsoft.com"
 
-        # 3. 写入配置文件 (标准结构)
+        # 3. 写入配置文件 (紧凑模式)
+        # 注意：这里我们直接按照你想要的格式排版，不需要 jq
         cat > /usr/local/etc/xray/config.json << EOF
 {
-  "log": {
-    "loglevel": "warning"
-  },
+  "log": { "loglevel": "warning" },
   "inbounds": [
     {
       "port": 52368,
       "protocol": "vless",
       "settings": {
-        "clients": [
-          {
-            "id": "$uuid",
-            "flow": "xtls-rprx-vision"
-          }
-        ],
+        "clients": [ { "id": "$uuid", "flow": "xtls-rprx-vision" } ],
         "decryption": "none"
       },
       "streamSettings": {
@@ -982,46 +971,25 @@ xray_management() {
         "security": "reality",
         "realitySettings": {
           "dest": "$dest_server",
-          "serverNames": [
-            "$server_name",
-            "microsoft.com"
-          ],
+          "serverNames": [ "$server_name", "microsoft.com" ],
           "privateKey": "$private_key",
-          "shortIds": [
-            "$short_id"
-          ]
+          "shortIds": [ "$short_id" ]
         }
       },
       "sniffing": {
         "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
+        "destOverride": [ "http", "tls", "quic" ]
       }
     }
   ],
   "outbounds": [
-    {
-      "protocol": "freedom",
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "tag": "block"
-    }
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
   ],
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
-      {
-        "type": "field",
-        "ip": [
-          "geoip:private"
-        ],
-        "outboundTag": "block"
-      }
+      { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" }
     ]
   }
 }
@@ -1030,7 +998,7 @@ EOF
         # 4. 重启服务
         systemctl restart xray
         
-        # 5. 检查状态并输出
+        # 5. 检查状态
         if systemctl is-active --quiet xray; then
             echo -e "${gl_lv}配置已应用！服务已启动。${gl_bai}"
             
@@ -1071,6 +1039,65 @@ EOF
         read -p "按回车继续..."
     }
 
+    # --- 菜单循环 ---
+    while true; do
+        clear
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#           Xray 核心服务管理 (Reality)        #"
+        echo -e "################################################${gl_bai}"
+        
+        if systemctl is-active --quiet xray; then
+            local ver=$(xray version | head -n 1 | awk '{print $2}')
+            echo -e "当前状态: ${gl_lv}运行中${gl_bai} (版本: $ver)"
+        else
+            if command -v xray &>/dev/null; then
+                echo -e "当前状态: ${gl_hong}已停止${gl_bai} (已安装)"
+            else
+                echo -e "当前状态: ${gl_hong}未安装${gl_bai}"
+            fi
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Xray (Official Script)"
+        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (VLESS-Reality-Vision)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_huang} 3.${gl_bai} 查看运行日志 (View Log)"
+        echo -e "${gl_huang} 4.${gl_bai} 重启服务 (Restart)"
+        echo -e "${gl_huang} 5.${gl_bai} 停止服务 (Stop)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hong} 6.${gl_bai} 卸载 Xray (Uninstall)"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        echo -e "------------------------------------------------"
+        
+        read -p "请输入选项: " choice
+
+        case "$choice" in
+            1) install_xray ;;
+            2) configure_reality ;;
+            3)
+                echo -e "${gl_huang}正在显示最后 20 条日志 (按 回车键 退出)...${gl_bai}"
+                journalctl -u xray -n 20 -f &
+                local tail_pid=$!
+                read -r
+                kill $tail_pid >/dev/null 2>&1
+                wait $tail_pid 2>/dev/null
+                ;;
+            4) 
+                systemctl restart xray
+                echo -e "${gl_lv}已重启${gl_bai}"
+                sleep 1
+                ;;
+            5)
+                systemctl stop xray
+                echo -e "${gl_hong}已停止${gl_bai}"
+                sleep 1
+                ;;
+            6) uninstall_xray ;;
+            0) return ;;
+            *) echo "无效选项" ;;
+        esac
+    done
+}
     # --- 菜单循环 ---
     while true; do
         clear
