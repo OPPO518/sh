@@ -884,27 +884,15 @@ EOF
     done
 }
 
-# ===== 功能模块: Sing-box 核心管理 (Deb包 + 防覆盖 + 自动防火墙) =====
-singbox_management() {
-    # --- 内部函数: 获取最新版本 ---
-    get_latest_version() {
-        # 抓取 GitHub API
-        local tag=$(curl -sL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | head -n 1 | cut -d '"' -f 4)
-        if [ -z "$tag" ]; then
-            echo "v1.12.13" # 用户指定兜底版本
-        else
-            echo "$tag"
-        fi
-    }
-
+# ===== 功能模块: Xray 核心管理 (官方脚本版) =====
+xray_management() {
+    
     # --- 内部函数: 自动放行 Nftables 端口 ---
     ensure_port_open() {
         local port="$1"
         if ! command -v nft &>/dev/null; then return; fi
-
-        echo -e "${gl_huang}正在检查防火墙端口 ($port)...${gl_bai}"
         
-        # 1. 确定表名和集合名
+        # 保持静默检查，不刷屏
         local table=""
         local set_tcp=""
         local set_udp=""
@@ -914,165 +902,145 @@ singbox_management() {
         elif nft list tables | grep -q "my_landing"; then
             table="my_landing"; set_tcp="allowed_tcp"; set_udp="allowed_udp"
         else
-            echo -e "${gl_hong}未检测到受管的 Nftables 表，跳过自动放行。${gl_bai}"
-            return
+            return # 无防火墙托管，直接跳过
         fi
 
-        # 2. 检查端口是否已存在
-        if nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
-            echo -e "端口 $port: ${gl_lv}已开放 (Skipped)${gl_bai}"
-        else
-            echo -e "端口 $port: ${gl_huang}未开放，正在添加规则...${gl_bai}"
+        if ! nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
+            echo -e "端口 $port: ${gl_huang}防火墙未放行，正在自动添加规则...${gl_bai}"
             nft add element inet $table $set_tcp { $port }
             nft add element inet $table $set_udp { $port }
             nft list ruleset > /etc/nftables.conf
-            echo -e "${gl_lv}端口 $port 已自动放行并保存。${gl_bai}"
+            echo -e "${gl_lv}端口 $port 已自动放行。${gl_bai}"
         fi
     }
 
-    # --- 内部函数: 安装/更新 Sing-box (二进制替换法 - 最稳妥) ---
-    install_singbox() {
-        echo -e "${gl_huang}正在检查系统架构...${gl_bai}"
-        local arch=$(uname -m)
-        local sb_arch=""
+    # --- 内部函数: 安装/升级 Xray (官方脚本) ---
+    install_xray() {
+        echo -e "${gl_huang}正在调用官方脚本安装/升级 Xray...${gl_bai}"
         
-        case "$arch" in
-            x86_64) sb_arch="amd64" ;;
-            aarch64) sb_arch="arm64" ;;
-            *) echo -e "${gl_hong}不支持的架构: $arch${gl_bai}"; return ;;
-        esac
-
-        local version=$(get_latest_version)
-        echo -e "检测到最新版本: ${gl_lv}${version}${gl_bai}"
+        # 调用官方脚本
+        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
         
-        # 核心修改：如果是升级，我们希望保护 config.json
-        # 最稳妥的方法不是依赖 apt 的 confold，而是下载 deb 后手动提取二进制
-        # 这样绝对不会触发 deb 的 postinst 脚本去碰 /etc/sing-box
-        
-        local ver_num=${version#v} 
-        local download_url="https://github.com/SagerNet/sing-box/releases/download/${version}/sing-box_${ver_num}_linux_${sb_arch}.deb"
-
-        echo -e "${gl_kjlan}正在下载 .deb 安装包...${gl_bai}"
-        echo "URL: $download_url"
-        
-        if curl -L -o /tmp/sing-box.deb "$download_url"; then
-            echo -e "${gl_huang}正在安装/升级...${gl_bai}"
+        if [ $? -eq 0 ]; then
+            echo -e "${gl_lv}Xray 安装/升级成功！${gl_bai}"
+            xray version | head -n 1
             
-            # 判断是新装还是升级
-            if command -v sing-box &>/dev/null; then
-                # [升级模式]：提取二进制覆盖，不碰配置文件
-                echo -e "${gl_huang}>>> 检测到旧版本，正在执行【安全升级】(不重置配置)...${gl_bai}"
-                
-                # 解压 deb 包中的 data.tar.xz
-                ar x /tmp/sing-box.deb data.tar.xz --output /tmp/
-                # 解压 data.tar.xz 提取 ./usr/bin/sing-box
-                tar -xf /tmp/data.tar.xz -C /tmp/ ./usr/bin/sing-box
-                
-                # 停止服务
-                systemctl stop sing-box
-                # 覆盖二进制
-                cp -f /tmp/usr/bin/sing-box /usr/bin/sing-box
-                chmod +x /usr/bin/sing-box
-                # 重启服务
-                systemctl restart sing-box
-                
-                # 清理
-                rm -f /tmp/sing-box.deb /tmp/data.tar.xz /tmp/usr/bin/sing-box
-                rm -rf /tmp/usr
-                
-                echo -e "${gl_lv}Sing-box 已安全升级到 ${version}！配置未变更。${gl_bai}"
-            else
-                # [新装模式]：直接安装 deb，享受自动配置服务文件的便利
-                echo -e "${gl_huang}>>> 首次安装，使用标准安装模式...${gl_bai}"
-                apt install /tmp/sing-box.deb -y
-                rm -f /tmp/sing-box.deb
-                
-                systemctl daemon-reload
-                systemctl enable sing-box
-                # 首次安装可能因为没配置起不来，忽略报错
-                systemctl restart sing-box 2>/dev/null
-                
-                echo -e "${gl_lv}Sing-box 安装成功！${gl_bai}"
-                echo -e "${gl_huang}注意：首次安装后请执行【菜单 2】进行初始化配置。${gl_bai}"
-            fi
-            
-            sing-box version | head -n 1
+            echo -e "------------------------------------------------"
+            echo -e "${gl_huang}提示:${gl_bai}"
+            echo -e "如果是【首次安装】，请务必执行菜单 ${gl_lv}选项 2${gl_bai} 生成配置。"
+            echo -e "如果是【版本升级】，服务已自动重启，无需操作。"
+            echo -e "------------------------------------------------"
         else
-            echo -e "${gl_hong}下载失败，请检查网络连接。${gl_bai}"
+            echo -e "${gl_hong}安装失败，请检查网络连接 (GitHub连通性)。${gl_bai}"
         fi
         read -p "按回车继续..."
     }
 
     # --- 内部函数: 配置 Reality (VLESS-Vision) ---
     configure_reality() {
-        if ! command -v sing-box &>/dev/null; then
-            echo -e "${gl_hong}请先安装 Sing-box！${gl_bai}"; sleep 1; return;
+        if ! command -v xray &>/dev/null; then
+            echo -e "${gl_hong}请先安装 Xray！${gl_bai}"; sleep 1; return;
         fi
 
-        # 1. 自动处理防火墙端口
+        # 1. 自动处理防火墙
         ensure_port_open "52368"
 
-        echo -e "${gl_huang}正在生成 Reality 配置文件...${gl_bai}"
+        echo -e "${gl_huang}正在生成 Xray 配置文件 (UUID/Keys)...${gl_bai}"
 
         # 2. 生成凭据
-        local uuid=$(sing-box generate uuid)
-        local key_pair=$(sing-box generate reality-keypair)
-        local private_key=$(echo "$key_pair" | grep "PrivateKey" | awk '{print $2}')
-        local public_key=$(echo "$key_pair" | grep "PublicKey" | awk '{print $2}')
+        local uuid=$(xray uuid)
+        local key_pair=$(xray x25519)
+        local private_key=$(echo "$key_pair" | grep "Private key:" | awk '{print $3}')
+        local public_key=$(echo "$key_pair" | grep "Public key:" | awk '{print $3}')
         local short_id=$(openssl rand -hex 4)
-        local server_name="www.microsoft.com"
         
-        # 3. 写入配置文件
-        cat > /etc/sing-box/config.json << EOF
+        # 伪装目标 (Microsoft)
+        local dest_server="www.microsoft.com:443"
+        local server_name="www.microsoft.com"
+
+        # 3. 写入配置文件 (标准结构)
+        cat > /usr/local/etc/xray/config.json << EOF
 {
   "log": {
-    "level": "info",
-    "timestamp": true
+    "loglevel": "warning"
   },
   "inbounds": [
     {
-      "type": "vless",
-      "tag": "vless-in",
-      "listen": "::",
-      "listen_port": 52368,
-      "users": [
-        {
-          "uuid": "$uuid",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "$server_name",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "$server_name",
-            "server_port": 443
-          },
-          "private_key": "$private_key",
-          "short_id": [
+      "port": 52368,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$uuid",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "dest": "$dest_server",
+          "serverNames": [
+            "$server_name",
+            "microsoft.com"
+          ],
+          "privateKey": "$private_key",
+          "shortIds": [
             "$short_id"
           ]
         }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
       }
     }
-  ]
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private"
+        ],
+        "outboundTag": "block"
+      }
+    ]
+  }
 }
 EOF
-        # 4. 校验并重启
-        if sing-box check -c /etc/sing-box/config.json; then
-            systemctl restart sing-box
+
+        # 4. 重启服务
+        systemctl restart xray
+        
+        # 5. 检查状态并输出
+        if systemctl is-active --quiet xray; then
             echo -e "${gl_lv}配置已应用！服务已启动。${gl_bai}"
             
-            # 5. 输出连接信息
             local current_ip=$(curl -s https://ipinfo.io/ip)
             if [ -z "$current_ip" ]; then current_ip="你的IP地址"; fi
             
-            local link="vless://$uuid@$current_ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#SingBox-Reality"
+            local link="vless://$uuid@$current_ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#Xray-Reality"
             
             echo -e "------------------------------------------------"
-            echo -e "${gl_kjlan}>>> 客户端连接信息 (VLESS-Reality-Vision) <<<${gl_bai}"
+            echo -e "${gl_kjlan}>>> 客户端连接信息 (Xray-Reality-Vision) <<<${gl_bai}"
             echo -e "地址 (Address): ${gl_bai}$current_ip${gl_bai}"
             echo -e "端口 (Port):    ${gl_bai}52368${gl_bai}"
             echo -e "用户ID (UUID):  ${gl_bai}$uuid${gl_bai}"
@@ -1083,23 +1051,20 @@ EOF
             echo -e "${gl_lv}$link${gl_bai}"
             echo -e "------------------------------------------------"
         else
-            echo -e "${gl_hong}配置文件生成有误，请检查日志！${gl_bai}"
+            echo -e "${gl_hong}服务启动失败！${gl_bai}"
+            echo -e "请运行此命令查看日志: journalctl -u xray -n 20 --no-pager"
         fi
         read -p "按回车继续..."
     }
 
-    # --- 内部函数: 卸载 Sing-box ---
-    uninstall_singbox() {
-        echo -e "${gl_hong}警告: 这将完全删除 Sing-box 程序和配置文件！${gl_bai}"
+    # --- 内部函数: 卸载 Xray ---
+    uninstall_xray() {
+        echo -e "${gl_hong}警告: 这将完全删除 Xray 程序和配置文件！${gl_bai}"
         read -p "确定要卸载吗？(y/n): " confirm
         if [[ "$confirm" == "y" ]]; then
-            echo -e "${gl_huang}正在卸载...${gl_bai}"
-            systemctl stop sing-box
-            apt purge sing-box -y
-            apt autoremove -y
-            rm -rf /etc/sing-box
-            rm -f /usr/bin/sing-box
-            echo -e "${gl_lv}Sing-box 已彻底卸载。${gl_bai}"
+            echo -e "${gl_huang}正在调用官方脚本卸载...${gl_bai}"
+            bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove
+            echo -e "${gl_lv}Xray 已卸载。${gl_bai}"
         else
             echo "已取消。"
         fi
@@ -1110,14 +1075,14 @@ EOF
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
-        echo -e "#           Sing-box 核心服务管理 (Reality)    #"
+        echo -e "#           Xray 核心服务管理 (Reality)        #"
         echo -e "################################################${gl_bai}"
         
-        if systemctl is-active --quiet sing-box; then
-            local ver=$(sing-box version | head -n 1 | awk '{print $3}')
+        if systemctl is-active --quiet xray; then
+            local ver=$(xray version | head -n 1 | awk '{print $2}')
             echo -e "当前状态: ${gl_lv}运行中${gl_bai} (版本: $ver)"
         else
-            if command -v sing-box &>/dev/null; then
+            if command -v xray &>/dev/null; then
                 echo -e "当前状态: ${gl_hong}已停止${gl_bai} (已安装)"
             else
                 echo -e "当前状态: ${gl_hong}未安装${gl_bai}"
@@ -1125,51 +1090,42 @@ EOF
         fi
         
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Sing-box (Install/Update)"
-        echo -e "${gl_lv} 2.${gl_bai} 配置为: 落地/通用服务端 (VLESS-Reality)"
+        echo -e "${gl_lv} 1.${gl_bai} 安装 / 升级 Xray (Official Script)"
+        # [修改] 如下：文案更纯粹，不再区分落地/中转
+        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (VLESS-Reality-Vision)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_huang} 3.${gl_bai} 检查配置语法 (Check Config)"
-        echo -e "${gl_huang} 4.${gl_bai} 查看运行日志 (View Log)"
-        echo -e "${gl_huang} 5.${gl_bai} 重启服务 (Restart)"
-        echo -e "${gl_huang} 6.${gl_bai} 停止服务 (Stop)"
+        echo -e "${gl_huang} 3.${gl_bai} 查看运行日志 (View Log)"
+        echo -e "${gl_huang} 4.${gl_bai} 重启服务 (Restart)"
+        echo -e "${gl_huang} 5.${gl_bai} 停止服务 (Stop)"
         echo -e "------------------------------------------------"
-        echo -e "${gl_hong} 7.${gl_bai} 卸载 Sing-box (Uninstall)"
+        echo -e "${gl_hong} 6.${gl_bai} 卸载 Xray (Uninstall)"
         echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
         echo -e "------------------------------------------------"
         
-        read -p "请输入选项: " sb_choice
+        read -p "请输入选项: " choice
 
-        case "$sb_choice" in
-            1) install_singbox ;;
+        case "$choice" in
+            1) install_xray ;;
             2) configure_reality ;;
-            3) 
-                if command -v sing-box &>/dev/null; then
-                    sing-box check -c /etc/sing-box/config.json
-                    if [ $? -eq 0 ]; then echo -e "${gl_lv}配置无误 (Config valid)${gl_bai}"; else echo -e "${gl_hong}配置有错 (Config invalid)${gl_bai}"; fi
-                else
-                    echo "未安装"
-                fi
-                read -p "按回车继续..."
-                ;;
-            4)
+            3)
                 echo -e "${gl_huang}正在显示最后 20 条日志 (按 回车键 退出)...${gl_bai}"
-                journalctl -u sing-box -n 20 -f &
+                journalctl -u xray -n 20 -f &
                 local tail_pid=$!
                 read -r
                 kill $tail_pid >/dev/null 2>&1
                 wait $tail_pid 2>/dev/null
                 ;;
-            5) 
-                systemctl restart sing-box
+            4) 
+                systemctl restart xray
                 echo -e "${gl_lv}已重启${gl_bai}"
                 sleep 1
                 ;;
-            6)
-                systemctl stop sing-box
+            5)
+                systemctl stop xray
                 echo -e "${gl_hong}已停止${gl_bai}"
                 sleep 1
                 ;;
-            7) uninstall_singbox ;;
+            6) uninstall_xray ;;
             0) return ;;
             *) echo "无效选项" ;;
         esac
@@ -1345,7 +1301,7 @@ main_menu() {
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
         echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
-        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Sing-box) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray-core) ${gl_hong}[Reality]${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
         echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
@@ -1362,7 +1318,7 @@ main_menu() {
             2) swap_management ;;
             3) nftables_management ;;
             4) fail2ban_management ;;
-            8) singbox_management ;;
+            8) xray_management ;;
             5) linux_info; break_end ;;
             6) linux_update; break_end ;;
             7) linux_clean; break_end ;;
