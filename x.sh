@@ -729,7 +729,7 @@ EOF
 
         echo -e "------------------------------------------------
 ${gl_kjlan}>>> 客户端连接信息 (Xray-core) <<<${gl_bai}
-地区 (Region):  ${gl_bai}$flag$ $code{gl_bai}
+地区 (Region):  ${gl_bai}$flag $code${gl_bai}
 地址 (Address): ${gl_bai}$ip${gl_bai}
 端口 (Port):    ${gl_bai}$port${gl_bai}
 用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
@@ -925,7 +925,7 @@ EOF
 
         echo -e "------------------------------------------------
 ${gl_kjlan}>>> 客户端连接信息 (Sing-box) <<<${gl_bai}
-地区 (Region):  ${gl_bai}$flag$ $code{gl_bai}
+地区 (Region):  ${gl_bai}$flag $code${gl_bai}
 地址 (Address): ${gl_bai}$ip${gl_bai}
 端口 (Port):    ${gl_bai}$port${gl_bai}
 用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
