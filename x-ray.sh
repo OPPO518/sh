@@ -905,17 +905,34 @@ xray_management() {
         esac
     }
 
-    # --- 局部函数: 自动放行端口 ---
+    # --- 局部函数: 自动放行端口 (升级版: 防重复+错误提示) ---
     ensure_port_open() {
-        if command -v nft &>/dev/null; then
-            if nft list tables | grep -q "my_landing"; then t="my_landing"; s="allowed_tcp"; su="allowed_udp";
-            elif nft list tables | grep -q "my_transit"; then t="my_transit"; s="local_tcp"; su="local_udp"; else return; fi
-            if ! nft list set inet $t $s 2>/dev/null | grep -q "$1"; then
-                echo -e "${gl_huang}防火墙放行端口 "$1"...${gl_bai}"
-                nft add element inet $t $s { $1 }
-                nft add element inet $t $su { $1 }
-                nft list ruleset > /etc/nftables.conf
-            fi
+        local port="$1"
+        if ! command -v nft &>/dev/null; then return; fi
+        
+        # 1. 确定表名
+        local table=""
+        local set_tcp=""
+        local set_udp=""
+        
+        if nft list tables | grep -q "my_landing"; then
+            table="my_landing"; set_tcp="allowed_tcp"; set_udp="allowed_udp"
+        elif nft list tables | grep -q "my_transit"; then
+            table="my_transit"; set_tcp="local_tcp"; set_udp="local_udp"
+        else
+            echo -e "${gl_hong}警告: 未检测到 Nftables 表，防火墙端口未自动放行。${gl_bai}"
+            return
+        fi
+
+        # 2. 幂等性检查 (避免重复添加)
+        if nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
+            echo -e "端口 $port: ${gl_lv}已在白名单中 (Skipped)${gl_bai}"
+        else
+            echo -e "端口 $port: ${gl_huang}正在添加防火墙规则...${gl_bai}"
+            nft add element inet $table $set_tcp { $port }
+            nft add element inet $table $set_udp { $port }
+            nft list ruleset > /etc/nftables.conf
+            echo -e "${gl_lv}端口 $port 已放行。${gl_bai}"
         fi
     }
 
