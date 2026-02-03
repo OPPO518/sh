@@ -1143,7 +1143,7 @@ main_menu() {
         echo -e "#            Debian VPS 极简运维工具箱         #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 2.1 (Restored Classic)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.1 (Restored Classic)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
