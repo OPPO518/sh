@@ -1080,9 +1080,25 @@ ${gl_lv}$link${gl_bai}
             2) configure_reality ;;
             3) view_config ;;
             4) 
-                echo -e "${gl_huang}日志快照 (最后 50 行):${gl_bai}"
-                journalctl -u xray -n 50 --no-pager
-                read -p "按回车返回..." 
+                echo -e "${gl_huang}正在实时监控 Xray 日志 (显示最后 20 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                
+                # 关键修改：加入 -f 参数实现动态追踪，并放入后台运行 (&)
+                journalctl -u xray -f -n 20 &
+                
+                # 获取刚才后台运行的 journalctl 的进程 ID
+                local log_pid=$!
+                
+                # 暂停脚本，单纯等待用户按回车
+                read -r
+                
+                # 用户按回车后，杀掉日志进程，停止输出
+                kill $log_pid >/dev/null 2>&1
+                wait $log_pid 2>/dev/null
+                
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
                 ;;
             5) systemctl restart xray; echo -e "${gl_lv}服务已重启${gl_bai}"; sleep 1 ;;
             6) systemctl stop xray; echo -e "${gl_hong}服务已停止${gl_bai}"; sleep 1 ;;
