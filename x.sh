@@ -1003,18 +1003,21 @@ singbox_management() {
         read -p "按回车继续..."
     }
 
-    # --- 内部函数: 配置 Reality (VLESS-Vision) ---
+    # --- 内部函数: 配置 Reality (VLESS-Vision) [随机端口版] ---
     configure_reality() {
         if ! command -v sing-box &>/dev/null; then
             echo -e "${gl_hong}请先安装 Sing-box！${gl_bai}"; sleep 1; return;
         fi
 
-        # 1. 自动处理防火墙端口
-        ensure_port_open "52368"
+        # 1. 生成随机端口 (20000-65000)
+        local port=$(shuf -i 20000-65000 -n 1)
+
+        # 2. 自动处理防火墙端口 (传入随机端口)
+        ensure_port_open "$port"
 
         echo -e "${gl_huang}正在生成 Reality 配置文件...${gl_bai}"
 
-        # 2. 生成凭据
+        # 3. 生成凭据
         local uuid=$(sing-box generate uuid)
         local key_pair=$(sing-box generate reality-keypair)
         local private_key=$(echo "$key_pair" | grep "PrivateKey" | awk '{print $2}')
@@ -1022,7 +1025,7 @@ singbox_management() {
         local short_id=$(openssl rand -hex 4)
         local server_name="www.microsoft.com"
         
-        # 3. 写入配置文件
+        # 4. 写入配置文件 (使用 $port)
         cat > /etc/sing-box/config.json << EOF
 {
   "log": {
@@ -1034,7 +1037,7 @@ singbox_management() {
       "type": "vless",
       "tag": "vless-in",
       "listen": "::",
-      "listen_port": 52368,
+      "listen_port": $port,
       "users": [
         {
           "uuid": "$uuid",
@@ -1060,21 +1063,22 @@ singbox_management() {
   ]
 }
 EOF
-        # 4. 校验并重启
+        # 5. 校验并重启
         if sing-box check -c /etc/sing-box/config.json; then
             systemctl restart sing-box
             echo -e "${gl_lv}配置已应用！服务已启动。${gl_bai}"
             
-            # 5. 输出连接信息
+            # 6. 输出连接信息
             local current_ip=$(curl -s https://ipinfo.io/ip)
             if [ -z "$current_ip" ]; then current_ip="你的IP地址"; fi
             
-            local link="vless://$uuid@$current_ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#SingBox-Reality"
+            # 链接中使用 $port
+            local link="vless://$uuid@$current_ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#SingBox-Reality"
             
             echo -e "------------------------------------------------"
             echo -e "${gl_kjlan}>>> 客户端连接信息 (VLESS-Reality-Vision) <<<${gl_bai}"
             echo -e "地址 (Address): ${gl_bai}$current_ip${gl_bai}"
-            echo -e "端口 (Port):    ${gl_bai}52368${gl_bai}"
+            echo -e "端口 (Port):    ${gl_bai}$port${gl_bai}"
             echo -e "用户ID (UUID):  ${gl_bai}$uuid${gl_bai}"
             echo -e "公钥 (Public):  ${gl_bai}$public_key${gl_bai}"
             echo -e "Short ID:       ${gl_bai}$short_id${gl_bai}"
