@@ -18,7 +18,7 @@ gl_zi='\033[35m'
 gl_kjlan='\033[96m'
 gl_hui='\e[37m'
 
-# ===== 全局辅助: 获取国旗 Emoji (优化: 全局定义，减少冗余) =====
+# ===== 全局辅助: 获取国旗 Emoji =====
 get_flag_local() {
     case "$1" in
         CN) echo "🇨🇳" ;; HK) echo "🇭🇰" ;; MO) echo "🇲🇴" ;; TW) echo "🇹🇼" ;;
@@ -39,7 +39,6 @@ ip_address() {
     isp_info=$(curl -s --max-time 3 http://ipinfo.io/org)
     if echo "$isp_info" | grep -Eiq 'mobile|unicom|telecom'; then ipv4_address=$(get_local_ip); else ipv4_address="$public_ip"; fi
     ipv6_address=$(curl -s --max-time 1 https://v6.ipinfo.io/ip && echo)
-    # 增加国家代码获取，供全局使用
     country_code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
     flag=$(get_flag_local "$country_code")
 }
@@ -49,7 +48,7 @@ output_status() {
     output=$(awk 'BEGIN { rx_total = 0; tx_total = 0 }
         $1 ~ /^(eth|ens|enp|eno)[0-9]+/ { rx_total += $2; tx_total += $10 }
         END {
-            rx_units = "Bytes"; tx_units = "Bytes";
+            rx_units = "B"; tx_units = "B";
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "K"; }
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "M"; }
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "G"; }
@@ -152,71 +151,107 @@ swap_management() {
         echo -e "################################################${gl_bai}"
         local swap_total=$(free -m | grep Swap | awk '{print $2}')
         if [ "$swap_total" -eq 0 ]; then
-             echo -e "当前状态: ${gl_hong}未启用${gl_bai}"
+             echo -e "当前状态: ${gl_hong}未启用 Swap${gl_bai}"
         else
-             echo -e "当前状态: ${gl_lv}已启用${gl_bai} | 大小: ${gl_huang}${swap_total}MB${gl_bai}"
+             echo -e "当前状态: ${gl_lv}已启用${gl_bai} | 总计: ${gl_kjlan}${swap_total}MB${gl_bai}"
         fi
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 设置/扩容 Swap"
-        echo -e "${gl_hong} 2.${gl_bai} 关闭/删除 Swap"
-        echo -e "${gl_hui} 0. 返回${gl_bai}"
+        echo -e "${gl_lv} 1.${gl_bai} 添加/扩容 Swap"
+        echo -e "${gl_hong} 2.${gl_bai} 卸载/关闭 Swap"
+        echo -e "${gl_hui} 0. 返回上级菜单${gl_bai}"
         echo -e "------------------------------------------------"
-        read -p "选项: " c
+        read -p "请输入选项 [0-2]: " c
         case "$c" in
             1)
-                read -p "输入大小(MB): " s
+                read -p "请输入 Swap 大小 (MB): " s
                 if [[ "$s" =~ ^[0-9]+$ ]]; then
                     echo -e "${gl_huang}正在处理...${gl_bai}"
                     swapoff -a 2>/dev/null; rm -f /swapfile; sed -i '/swapfile/d' /etc/fstab
                     dd if=/dev/zero of=/swapfile bs=1M count=$s status=progress
                     chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile
                     echo '/swapfile none swap sw 0 0' >> /etc/fstab
-                    echo -e "${gl_lv}成功${gl_bai}"; read -p "..." 
+                    echo -e "${gl_lv}成功${gl_bai}"; read -p "按回车继续..." 
                 fi ;;
             2) 
                 echo -e "${gl_huang}正在卸载...${gl_bai}"
-                swapoff -a; rm -f /swapfile; sed -i '/swapfile/d' /etc/fstab; echo -e "${gl_lv}已删除${gl_bai}"; read -p "..." ;;
+                swapoff -a; rm -f /swapfile; sed -i '/swapfile/d' /etc/fstab; echo -e "${gl_lv}已删除${gl_bai}"; read -p "按回车继续..." ;;
             0) return ;;
+            *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
         esac
     done
 }
 
-# ===== 模块 3: Nftables 防火墙 (v1.6 逻辑 + 修复菜单Bug) =====
+# ===== 模块 3: Nftables 防火墙 (v1.6 修正版) =====
 nftables_management() {
-    detect_ssh() { ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1 || echo 22; }
-    
-    init_fw() {
-        local type=$1; local port=$(detect_ssh)
-        echo -e "${gl_huang}清理环境...${gl_bai}"
-        ufw disable 2>/dev/null; apt purge ufw -y 2>/dev/null
-        
-        if [ "$type" == "landing" ]; then
-            sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
-        else
-            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-        fi
+    # 自动检测 SSH 端口
+    detect_ssh_port() {
+        local port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1)
+        if [ -z "$port" ]; then port="22"; fi
+        echo "$port"
+    }
 
-        apt update && apt install nftables -y; systemctl enable nftables
+    # 落地机初始化
+    init_landing_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port}${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
         
-        echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
-        echo "flush ruleset" >> /etc/nftables.conf
+        echo -e "正在清理冲突组件..."
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
         
-        if [ "$type" == "landing" ]; then
-            cat >> /etc/nftables.conf << EOF
+        sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
+        rm -f /etc/sysctl.d/99-transit-forward.conf
+        
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
 table inet my_landing {
     set allowed_tcp { type inet_service; flags interval; }
     set allowed_udp { type inet_service; flags interval; }
     chain input {
         type filter hook input priority 0; policy drop;
-        iif "lo" accept; ct state established,related accept; icmp type echo-request accept; icmpv6 type echo-request accept;
-        tcp dport $port accept; tcp dport @allowed_tcp accept; udp dport @allowed_udp accept;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        tcp dport $ssh_port accept
+        tcp dport @allowed_tcp accept
+        udp dport @allowed_udp accept
     }
     chain forward { type filter hook forward priority 0; policy drop; }
     chain output { type filter hook output priority 0; policy accept; }
 }
 EOF
-        else
-            cat >> /etc/nftables.conf << EOF
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}落地机防火墙部署完成！${gl_bai}"
+    }
+
+    # 中转机初始化
+    init_transit_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port}${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 中转机(Transit) 策略...${gl_bai}"
+
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        modprobe nft_nat 2>/dev/null
+        modprobe br_netfilter 2>/dev/null
+        
+        # 强制开启转发
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-transit-forward.conf
+        
+        cat > /etc/nftables.conf << EOF
+#!/usr/sbin/nft -f
+flush ruleset
 table inet my_transit {
     set local_tcp { type inet_service; flags interval; }
     set local_udp { type inet_service; flags interval; }
@@ -224,96 +259,214 @@ table inet my_transit {
     map fwd_udp { type inet_service : ipv4_addr . inet_service; }
     chain input {
         type filter hook input priority 0; policy drop;
-        iif "lo" accept; ct state established,related accept; icmp type echo-request accept; icmpv6 type echo-request accept;
-        tcp dport $port accept; tcp dport @local_tcp accept; udp dport @local_udp accept;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        tcp dport $ssh_port accept
+        tcp dport @local_tcp accept
+        udp dport @local_udp accept
     }
-    chain forward { type filter hook forward priority 0; policy accept; ct state established,related accept; tcp flags syn tcp option maxseg size set 1360; }
-    chain prerouting { type nat hook prerouting priority -100; policy accept; dnat ip to tcp dport map @fwd_tcp; dnat ip to udp dport map @fwd_udp; }
-    chain postrouting { type nat hook postrouting priority 100; policy accept; oifname != "lo" masquerade; }
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ct state established,related accept
+        tcp flags syn tcp option maxseg size set 1360
+    }
+    chain prerouting {
+        type nat hook prerouting priority -100; policy accept;
+        dnat ip to tcp dport map @fwd_tcp
+        dnat ip to udp dport map @fwd_udp
+    }
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        oifname != "lo" masquerade
+    }
 }
 EOF
-        fi
-        nft -f /etc/nftables.conf; systemctl restart nftables
-        echo -e "${gl_lv}防火墙已重置为: $type${gl_bai}"; read -p "..."
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}中转机防火墙部署完成！${gl_bai}"
     }
 
+    # 可视化列表 (Fix awk bug)
     list_rules_ui() {
-        echo -e "${gl_huang}=== 防火墙状态 ===${gl_bai}"
-        echo -e "SSH Port: ${gl_lv}$(detect_ssh)${gl_bai}"
-        if nft list tables | grep -q "my_transit"; then t="my_transit"; st="local_tcp"; su="local_udp";
-        elif nft list tables | grep -q "my_landing"; then t="my_landing"; st="allowed_tcp"; su="allowed_udp";
-        else echo "未初始化"; return; fi
+        echo -e "${gl_huang}=== 防火墙规则概览 ===${gl_bai}"
+        local current_ssh=$(detect_ssh_port)
+        echo -e "基础防自锁: ${gl_lv}SSH Port ${current_ssh} [✔]${gl_bai}"
         
-        echo "------------------------------------------------"
-        local tcp=$(nft list set inet $t $st 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
-        local udp=$(nft list set inet $t $su 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
-        echo -e "放行 TCP: ${gl_kjlan}${tcp:-无}${gl_bai}"
-        echo -e "放行 UDP: ${gl_kjlan}${udp:-无}${gl_bai}"
+        local table_name=""
+        local set_tcp_name=""
+        local set_udp_name=""
         
-        if [ "$t" == "my_transit" ]; then
-            echo "------------------------------------------------"
-            echo "转发规则:"
-            nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "TCP %-6s -> %s : %s\n", $1, $3, $5}'
-            nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "UDP %-6s -> %s : %s\n", $1, $3, $5}'
+        if nft list tables | grep -q "my_transit"; then 
+            table_name="my_transit"; set_tcp_name="local_tcp"; set_udp_name="local_udp"
+        elif nft list tables | grep -q "my_landing"; then
+            table_name="my_landing"; set_tcp_name="allowed_tcp"; set_udp_name="allowed_udp"
+        else 
+            echo -e "${gl_hong}防火墙未初始化${gl_bai}"; return
         fi
+
         echo "------------------------------------------------"
+        echo -e "${gl_huang}=== 自定义端口放行 ===${gl_bai}"
+        local tcp_list=$(nft list set inet $table_name $set_tcp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
+        local udp_list=$(nft list set inet $table_name $set_udp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
+
+        echo -e "[TCP] ${gl_kjlan}${tcp_list:-无}${gl_bai}"
+        echo -e "[UDP] ${gl_kjlan}${udp_list:-无}${gl_bai}"
+        echo "------------------------------------------------"
+        
+        if [ "$table_name" == "my_transit" ]; then
+            echo -e "${gl_kjlan}=== 端口转发规则 ===${gl_bai}"
+            echo "--- TCP 转发 ---"
+            local tcp_fwd=$(nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
+            if [ -z "$tcp_fwd" ]; then echo "无"; else echo "$tcp_fwd"; fi
+            echo "--- UDP 转发 ---"
+            local udp_fwd=$(nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
+            if [ -z "$udp_fwd" ]; then echo "无"; else echo "$udp_fwd"; fi
+            echo "------------------------------------------------"
+        fi
     }
 
+    # Nftables 菜单循环
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
-        echo -e "#           Nftables 防火墙管理                #"
+        echo -e "#          Nftables 防火墙与中转管理           #"
         echo -e "################################################${gl_bai}"
-        if nft list tables | grep -q "my_transit"; then mode="Transit"; table="my_transit"; set="local_tcp";
-        elif nft list tables | grep -q "my_landing"; then mode="Landing"; table="my_landing"; set="allowed_tcp";
-        else mode="None"; fi
         
-        echo -e "模式: ${gl_huang}$mode${gl_bai} | SSH端口: $(detect_ssh)"
-        echo -e "------------------------------------------------"
-        if [ "$mode" == "None" ]; then
-            echo -e "${gl_lv} 1.${gl_bai} 初始化为: 落地机 (Landing)"
-            echo -e "${gl_lv} 2.${gl_bai} 初始化为: 中转机 (Transit)"
+        local ssh_p=$(detect_ssh_port)
+        echo -e "当前 SSH 端口: ${gl_lv}${ssh_p}${gl_bai}"
+        
+        if nft list tables | grep -q "my_transit"; then
+            echo -e "当前模式: ${gl_kjlan}中转机 (Transit NAT)${gl_bai}"
+            mode="transit"
+            set_tcp="local_tcp"; set_udp="local_udp"
+        elif nft list tables | grep -q "my_landing"; then
+            echo -e "当前模式: ${gl_huang}落地机 (Landing FW)${gl_bai}"
+            mode="landing"
+            set_tcp="allowed_tcp"; set_udp="allowed_udp"
         else
-            echo -e "${gl_lv} 3.${gl_bai} 查看规则 (List Rules)"
-            echo -e "${gl_lv} 4.${gl_bai} 放行端口 (Allow Port)"
-            echo -e "${gl_lv} 5.${gl_bai} 删除端口 (Del Port)"
-            if [ "$mode" == "Transit" ]; then
-                echo -e "${gl_kjlan} 6.${gl_bai} 添加转发 (Add Forward)"
-                echo -e "${gl_kjlan} 7.${gl_bai} 删除转发 (Del Forward)"
-            fi
-            echo -e "${gl_hong} 8.${gl_bai} 重置防火墙 (Reset)"
+            echo -e "当前模式: ${gl_hong}未初始化 / 未知${gl_bai}"
+            mode="none"
         fi
-        echo -e "${gl_hui} 0. 返回${gl_bai}"
         echo -e "------------------------------------------------"
-        read -p "选项: " c
-        case "$c" in
-            # [修复]: 增加状态判断，防止误触不可见菜单
-            1) if [ "$mode" == "None" ]; then init_fw landing; else echo -e "${gl_hong}请先重置!${gl_bai}"; sleep 1; fi ;;
-            2) if [ "$mode" == "None" ]; then init_fw transit; else echo -e "${gl_hong}请先重置!${gl_bai}"; sleep 1; fi ;;
-            3) list_rules_ui; read -p "..." ;;
-            4) read -p "端口: " p; nft add element inet $table $set { $p }; nft add element inet $table ${set/tcp/udp} { $p }; nft list ruleset > /etc/nftables.conf; echo "OK"; sleep 1 ;;
-            5) read -p "端口: " p; nft delete element inet $table $set { $p }; nft delete element inet $table ${set/tcp/udp} { $p }; nft list ruleset > /etc/nftables.conf; echo "OK"; sleep 1 ;;
-            6) [ "$mode" == "Transit" ] && read -p "本机端口: " lp && read -p "目标IP: " dip && read -p "目标端口: " dp && nft add element inet my_transit fwd_tcp { $lp : $dip . $dp } && nft add element inet my_transit fwd_udp { $lp : $dip . $dp } && nft list ruleset > /etc/nftables.conf && echo "OK"; sleep 1 ;;
-            7) [ "$mode" == "Transit" ] && read -p "本机端口: " lp && nft delete element inet my_transit fwd_tcp { $lp } && nft delete element inet my_transit fwd_udp { $lp } && nft list ruleset > /etc/nftables.conf && echo "OK"; sleep 1 ;;
-            8) nft flush ruleset; echo "flush ruleset" > /etc/nftables.conf; 
-               if systemctl is-active --quiet fail2ban; then systemctl restart fail2ban; fi
-               echo "已重置"; read -p "..." ;;
+        
+        if [ "$mode" == "none" ]; then
+            echo -e "${gl_lv} 1.${gl_bai} 初始化为：落地机防火墙 (仅放行)"
+            echo -e "${gl_lv} 2.${gl_bai} 初始化为：中转机防火墙 (含转发面板)"
+        else
+            echo -e "${gl_lv} 3.${gl_bai} 查看所有规则 (List Rules)"
+            echo -e "${gl_lv} 4.${gl_bai} 添加放行端口 (Allow Port)"
+            echo -e "${gl_lv} 5.${gl_bai} 删除放行端口 (Delete Port)"
+            if [ "$mode" == "transit" ]; then
+                echo -e "${gl_kjlan} 6.${gl_bai} 添加转发规则 (Add Forward)"
+                echo -e "${gl_kjlan} 7.${gl_bai} 删除转发规则 (Del Forward)"
+            fi
+            echo -e "${gl_hong} 8.${gl_bai} 重置/切换模式 (Re-Init)"
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        
+        read -p "请输入选项: " nf_choice
+
+        case "$nf_choice" in
+            1) 
+                if [ "$mode" == "none" ]; then init_landing_firewall; else echo -e "${gl_hong}请先执行选项 8 重置！${gl_bai}"; sleep 1; fi
+                read -p "按回车继续..." ;;
+            2) 
+                if [ "$mode" == "none" ]; then init_transit_firewall; else echo -e "${gl_hong}请先执行选项 8 重置！${gl_bai}"; sleep 1; fi
+                read -p "按回车继续..." ;;
+            3) list_rules_ui; read -p "按回车继续..." ;;
+            4) 
+                read -p "请输入端口: " p_port
+                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
+                    nft add element inet $table $set_tcp { $p_port }
+                    nft add element inet $table $set_udp { $p_port }
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_lv}端口 $p_port 已放行。${gl_bai}"
+                fi
+                sleep 1
+                ;;
+            5)
+                read -p "请输入删除端口: " p_port
+                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
+                    nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
+                    nft delete element inet $table $set_udp { $p_port } 2>/dev/null
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_hong}端口 $p_port 已移除。${gl_bai}"
+                fi
+                sleep 1
+                ;;
+            6) 
+                if [ "$mode" == "transit" ]; then
+                    read -p "本机端口: " lp; read -p "目标 IP: " dip; read -p "目标端口: " dp
+                    if [[ -n "$lp" && -n "$dip" && -n "$dp" ]]; then
+                        nft add element inet my_transit fwd_tcp { $lp : $dip . $dp }
+                        nft add element inet my_transit fwd_udp { $lp : $dip . $dp }
+                        nft list ruleset > /etc/nftables.conf
+                        echo -e "${gl_lv}规则已添加。${gl_bai}"
+                    fi
+                fi
+                sleep 1
+                ;;
+            7) 
+                if [ "$mode" == "transit" ]; then
+                    read -p "请输入删除的本机端口: " lp
+                    nft delete element inet my_transit fwd_tcp { $lp } 2>/dev/null
+                    nft delete element inet my_transit fwd_udp { $lp } 2>/dev/null
+                    nft list ruleset > /etc/nftables.conf
+                    echo -e "${gl_hong}规则已移除。${gl_bai}"
+                fi
+                sleep 1
+                ;;
+            8) 
+                echo -e "${gl_hong}注意: 这将清空所有规则！${gl_bai}"
+                read -p "确定? (y/n): " confirm
+                if [[ "$confirm" == "y" ]]; then
+                    echo -e "${gl_huang}正在清除...${gl_bai}"
+                    nft flush ruleset
+                    echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
+                    echo "flush ruleset" >> /etc/nftables.conf
+                    if systemctl is-active --quiet fail2ban; then systemctl restart fail2ban; fi
+                    mode="none"
+                    echo -e "${gl_lv}已重置。${gl_bai}"
+                    sleep 1
+                fi
+                ;;
             0) return ;;
+            *) echo "无效选项" ;;
         esac
     done
 }
 
-# ===== 模块 4: Fail2ban (v1.6 逻辑) =====
+# ===== 模块 4: Fail2ban (v1.6 还原版 + 日志修复) =====
 fail2ban_management() {
-    install_f2b() {
-        echo -e "${gl_huang}安装 Fail2ban...${gl_bai}"
-        read -p "请输入白名单IP (空格分隔): " wl
-        ignore="127.0.0.1/8 ::1 $wl"
-        ssh_port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1 || echo 22)
+    detect_ssh_port() {
+        local port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1)
+        if [ -z "$port" ]; then port="22"; fi
+        echo "$port"
+    }
+
+    install_fail2ban() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}=== Fail2ban 安装向导 ===${gl_bai}"
+        echo -e "当前 SSH 端口: ${gl_lv}${ssh_port}${gl_bai}"
         
+        echo -e "------------------------------------------------"
+        echo -e "${gl_huang}请输入白名单 IP (防止误封)${gl_bai}"
+        read -p "留空则跳过: " whitelist_ips
+        
+        local ignore_ip_conf="127.0.0.1/8 ::1"
+        if [ -n "$whitelist_ips" ]; then ignore_ip_conf="$ignore_ip_conf $whitelist_ips"; fi
+
+        echo -e "${gl_kjlan}正在安装...${gl_bai}"
         apt update && apt install fail2ban rsyslog -y
-        systemctl enable --now rsyslog; touch /var/log/auth.log /var/log/fail2ban.log
-        
+        systemctl enable --now rsyslog
+        touch /var/log/auth.log /var/log/fail2ban.log
+
         cat > /etc/fail2ban/jail.d/00-default-nftables.conf << EOF
 [DEFAULT]
 banaction = nftables-multiport
@@ -322,8 +475,10 @@ chain = input
 EOF
         cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
-ignoreip = $ignore
-findtime = 600; maxretry = 5; backend = polling
+ignoreip = $ignore_ip_conf
+findtime = 600
+maxretry = 5
+backend = polling
 [sshd]
 enabled = true
 port = $ssh_port
@@ -334,36 +489,100 @@ bantime = 10800
 enabled = true
 logpath = /var/log/fail2ban.log
 filter = recidive
+findtime = 172800
+maxretry = 2
 bantime = 259200
+bantime.increment = true
+bantime.factor = 121.6
+bantime.maxsize = 31536000
 EOF
-        systemctl restart fail2ban; echo -e "${gl_lv}已安装${gl_bai}"; read -p "..."
+        systemctl stop fail2ban >/dev/null 2>&1
+        rm -f /var/run/fail2ban/fail2ban.sock
+        systemctl daemon-reload
+        systemctl restart fail2ban
+        systemctl enable fail2ban
+
+        echo -e "${gl_lv}Fail2ban 部署完成！${gl_bai}"
+        sleep 2
+    }
+
+    check_f2b_status() {
+        if ! systemctl is-active --quiet fail2ban; then
+            echo -e "${gl_hong}Fail2ban 未运行！${gl_bai}"; return
+        fi
+        echo -e "${gl_huang}=== 当前封禁统计 ===${gl_bai}"
+        fail2ban-client status sshd
+        echo -e "------------------------------------------------"
+        fail2ban-client status recidive
+    }
+
+    unban_ip() {
+        read -p "请输入要解封的 IP: " target_ip
+        if [ -n "$target_ip" ]; then
+            fail2ban-client set sshd unbanip $target_ip
+            fail2ban-client set recidive unbanip $target_ip
+            echo -e "${gl_lv}指令已发送。${gl_bai}"
+        fi
     }
 
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
-        echo -e "#             Fail2ban 防暴破管理                  #"
+        echo -e "#             Fail2ban 防暴力破解管理          #"
         echo -e "################################################${gl_bai}"
-        if systemctl is-active --quiet fail2ban; then echo -e "状态: ${gl_lv}运行中${gl_bai}"; else echo -e "状态: ${gl_hong}停止${gl_bai}"; fi
+        
+        if systemctl is-active --quiet fail2ban; then
+            echo -e "当前状态: ${gl_lv}运行中 (Running)${gl_bai}"
+        else
+            echo -e "当前状态: ${gl_hong}未运行 / 未安装${gl_bai}"
+        fi
+        
         echo -e "------------------------------------------------"
-        echo " 1. 安装/重置 (Install)"
-        echo " 2. 查看日志 (Log)"
-        echo " 3. 手动解封 IP (Unban)"
-        echo " 4. 卸载 (Uninstall)"
-        echo " 0. 返回"
-        read -p "选项: " c
-        case "$c" in
-            1) install_f2b ;;
-            2) echo -e "${gl_huang}按回车退出...${gl_bai}"; tail -f -n 20 /var/log/fail2ban.log & pid=$!; read -r; kill $pid; wait $pid 2>/dev/null ;;
-            3) read -p "IP: " ip; fail2ban-client set sshd unbanip $ip; fail2ban-client set recidive unbanip $ip; echo "OK"; sleep 1 ;;
-            4) apt purge fail2ban -y; rm -rf /etc/fail2ban; nft delete table inet f2b-table 2>/dev/null; echo "已卸载"; read -p "..." ;;
+        echo -e "${gl_lv} 1.${gl_bai} 安装/重置 Fail2ban (Install/Reset)"
+        echo -e "${gl_lv} 2.${gl_bai} 查看封禁状态 (Status)"
+        echo -e "${gl_lv} 3.${gl_bai} 手动解封 IP (Unban IP)"
+        echo -e "${gl_lv} 4.${gl_bai} 查看攻击日志 (View Log)"
+        echo -e "${gl_hong} 5.${gl_bai} 卸载 Fail2ban (Uninstall)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        
+        read -p "请输入选项: " f2b_choice
+
+        case "$f2b_choice" in
+            1) install_fail2ban; read -p "按回车继续..." ;;
+            2) check_f2b_status; read -p "按回车继续..." ;;
+            3) unban_ip; read -p "按回车继续..." ;;
+            4) 
+                echo -e "${gl_huang}正在实时显示日志 (显示最后 20 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                tail -f -n 20 /var/log/fail2ban.log &
+                local tail_pid=$!
+                read -r
+                kill $tail_pid >/dev/null 2>&1
+                wait $tail_pid 2>/dev/null
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
+                ;;
+            5)
+                echo -e "${gl_huang}正在卸载...${gl_bai}"
+                systemctl stop fail2ban
+                systemctl disable fail2ban
+                apt purge fail2ban -y
+                rm -rf /etc/fail2ban /var/log/fail2ban.log
+                nft delete table inet f2b-table 2>/dev/null
+                echo -e "${gl_lv}卸载完成。${gl_bai}"
+                read -p "按回车继续..."
+                ;;
             0) return ;;
+            *) echo "无效选项" ;;
         esac
     done
 }
 
-# ===== 模块 8A: Xray 管理 (收据模式 + 自动端口) =====
+# ===== 模块 8A: Xray 核心管理 (官方直连) =====
 xray_management() {
+    
     BIN_PATH="/usr/local/bin/xray"
     CONF_DIR="/usr/local/etc/xray"
     INFO_FILE="${CONF_DIR}/info.txt"
@@ -382,29 +601,58 @@ xray_management() {
     }
 
     install_xray() {
-        echo -e "${gl_huang}调用官方脚本安装 (Install Latest)...${gl_bai}"
-        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
-        if [ $? -eq 0 ]; then
-            echo -e "${gl_lv}安装成功！${gl_bai}"; $BIN_PATH version | head -n 1
-        else
-            echo -e "${gl_hong}安装失败 (网络问题)${gl_bai}"; 
-        fi
-        read -p "按回车继续..."
+        echo -e "${gl_huang}正在下载 Xray-core (直连 GitHub v1.8.24)...${gl_bai}"
+        systemctl stop xray 2>/dev/null
+        rm -f /usr/local/bin/xray $INFO_FILE
+        rm -rf /usr/local/share/xray
+        mkdir -p /usr/local/share/xray
+        apt update && apt install unzip curl -y
+        
+        local arch=$(uname -m)
+        local url=""
+        if [[ "$arch" == "x86_64" ]]; then url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip"
+        elif [[ "$arch" == "aarch64" ]]; then url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-arm64-v8a.zip"
+        else echo -e "${gl_hong}不支持架构: $arch${gl_bai}"; return; fi
+        
+        curl -L -o /tmp/xray.zip "$url"
+        if [ ! -s "/tmp/xray.zip" ]; then echo -e "${gl_hong}下载失败!${gl_bai}"; return; fi
+        
+        unzip -o /tmp/xray.zip -d /tmp/xray_dist
+        mv -f /tmp/xray_dist/xray /usr/local/bin/xray; chmod +x /usr/local/bin/xray
+        mv -f /tmp/xray_dist/geoip.dat /usr/local/share/xray/
+        mv -f /tmp/xray_dist/geosite.dat /usr/local/share/xray/
+        
+        cat > /etc/systemd/system/xray.service << EOF
+[Unit]
+Description=Xray Service
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+EOF
+        mkdir -p $CONF_DIR
+        rm -rf /tmp/xray.zip /tmp/xray_dist
+        systemctl daemon-reload; systemctl enable xray
+        echo -e "${gl_lv}安装成功!${gl_bai}"; read -p "按回车继续..."
     }
 
     configure_reality() {
-        [ ! -f "$BIN_PATH" ] && { echo "请先安装 Xray"; sleep 1; return; }
+        if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
         
         local port=$(shuf -i 20000-65000 -n 1)
         ensure_port_open "$port"
-        echo -e "${gl_huang}生成配置中...${gl_bai}"
+        echo -e "${gl_huang}正在生成配置...${gl_bai}"
         
-        uuid=$($BIN_PATH uuid)
-        kp=$($BIN_PATH x25519)
-        pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
-        pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
+        local uuid=$($BIN_PATH uuid)
+        local kp=$($BIN_PATH x25519)
+        local pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
+        local pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
         [ -z "$pub" ] && pub=$(echo "$kp" | grep -i "Password" | cut -d: -f2 | tr -d '[:space:]')
-        sid=$(openssl rand -hex 8)
+        local sid=$(openssl rand -hex 8)
+
+        if [ -z "$pub" ]; then echo -e "${gl_hong}密钥生成失败: $kp${gl_bai}"; read -p "..."; return; fi
         
         mkdir -p $CONF_DIR
         cat > ${CONF_DIR}/config.json << EOF
@@ -428,7 +676,7 @@ xray_management() {
   "routing": { "domainStrategy": "IPIfNonMatch", "rules": [ { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" } ] }
 }
 EOF
-        echo -e "${gl_huang}保存配置收据...${gl_bai}"
+        echo -e "${gl_huang}正在保存连接信息...${gl_bai}"
         local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
         local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
         local flag=$(get_flag_local "$code")
@@ -452,15 +700,29 @@ ${gl_lv}$link${gl_bai}
     }
 
     view_config() {
-        if [ -f "$INFO_FILE" ]; then clear; cat $INFO_FILE; else echo -e "${gl_hong}未找到配置，请先初始化${gl_bai}"; fi
-        [ "${FUNCNAME[1]}" != "configure_reality" ] && read -p "按回车返回..."
+        if [ -f "$INFO_FILE" ]; then
+            clear
+            cat $INFO_FILE
+        else
+            echo -e "${gl_hong}未找到配置信息，请先初始化！${gl_bai}"
+        fi
+        if [ "${FUNCNAME[1]}" != "configure_reality" ]; then 
+            read -p "按回车返回..."
+        fi
     }
 
     uninstall_xray() {
-        echo -e "${gl_huang}调用官方脚本卸载...${gl_bai}"
-        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
-        rm -rf $CONF_DIR
-        echo "已卸载"; read -p "..."
+        echo -e "${gl_hong}警告: 这将删除 Xray 程序、配置及日志！${gl_bai}"
+        read -p "确认卸载? (y/n): " confirm
+        if [[ "$confirm" == "y" ]]; then
+            echo -e "${gl_huang}正在卸载...${gl_bai}"
+            systemctl stop xray; systemctl disable xray
+            rm -f /usr/local/bin/xray /etc/systemd/system/xray.service $INFO_FILE
+            rm -rf /usr/local/etc/xray /usr/local/share/xray
+            systemctl daemon-reload
+            echo -e "${gl_lv}Xray 已卸载。${gl_bai}"
+        fi
+        read -p "按回车继续..."
     }
 
     while true; do
@@ -470,7 +732,7 @@ ${gl_lv}$link${gl_bai}
         echo -e "################################################${gl_bai}"
         if systemctl is-active --quiet xray; then v=$($BIN_PATH version 2>/dev/null | head -n 1 | awk '{print $2}'); echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: ${v:-未知})"; else echo -e "状态: ${gl_hong}● 已停止${gl_bai}"; fi
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装/更新 (Install Latest)"
+        echo -e "${gl_lv} 1.${gl_bai} 手动下载安装 (Install)"
         echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Reset Config)"
         echo -e "${gl_huang} 3.${gl_bai} 查看当前配置 (View Info)"
         echo -e "------------------------------------------------"
@@ -486,9 +748,9 @@ ${gl_lv}$link${gl_bai}
             1) install_xray ;;
             2) configure_reality ;;
             3) view_config ;;
-            4) echo -e "${gl_huang}回车退出监控...${gl_bai}"; journalctl -u xray -n 50 -f & pid=$!; read -r; kill $pid; wait $pid 2>/dev/null ;;
-            5) systemctl restart xray; echo "已重启"; sleep 1 ;;
-            6) systemctl stop xray; echo "已停止"; sleep 1 ;;
+            4) echo -e "${gl_huang}日志快照 (最后 50 行):${gl_bai}"; journalctl -u xray -n 50 --no-pager; read -p "按回车返回..." ;;
+            5) systemctl restart xray; echo -e "${gl_lv}服务已重启${gl_bai}"; sleep 1 ;;
+            6) systemctl stop xray; echo -e "${gl_hong}服务已停止${gl_bai}"; sleep 1 ;;
             9) uninstall_xray ;;
             0) return ;;
             *) echo "无效选项" ;;
@@ -507,9 +769,9 @@ singbox_management() {
         if command -v nft &>/dev/null; then
             if nft list tables | grep -q "my_landing"; then t="my_landing"; s="allowed_tcp"; su="allowed_udp";
             elif nft list tables | grep -q "my_transit"; then t="my_transit"; s="local_tcp"; su="local_udp"; else return; fi
-            if ! nft list set inet $t $s 2>/dev/null | grep -q "$port"; then
-                echo -e "${gl_huang}自动放行端口 $port...${gl_bai}"
-                nft add element inet $t $s { $port }; nft add element inet $t $su { $port }
+            if ! nft list set inet $t $s 2>/dev/null | grep -q "$1"; then
+                echo -e "${gl_huang}自动放行端口 $1...${gl_bai}"
+                nft add element inet $t $s { $1 }; nft add element inet $t $su { $1 }
                 nft list ruleset > /etc/nftables.conf
             fi
         fi
@@ -721,7 +983,7 @@ linux_info() {
     echo ""
     echo -e "${gl_lv}系统信息概览${gl_bai}"
     echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($country_code $flag)"
+    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname"
     echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
     echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
     echo -e "${gl_kjlan}-------------"
@@ -755,50 +1017,101 @@ linux_info() {
     echo -e "${gl_kjlan}-------------"
     echo -e "${gl_kjlan}运行时长:       ${gl_bai}$runtime"
     echo
-    echo "按回车返回..."
+    echo "按回车键返回..."
     read -r
 }
 
 linux_update() {
-    echo -e "${gl_huang}正在更新...${gl_bai}"
-    apt update && apt full-upgrade -y
-    [ -f /var/run/reboot-required ] && echo -e "${gl_hong}内核已更新，建议重启${gl_bai}" || echo -e "${gl_lv}更新完成${gl_bai}"
-    read -p "..."
+    echo -e "${gl_huang}正在进行系统更新...${gl_bai}"
+    if command -v apt &>/dev/null; then
+        apt update -y
+        apt full-upgrade -y
+        
+        # 检测是否需要重启
+        if [ -f /var/run/reboot-required ]; then
+            echo -e "${gl_hong}注意：检测到内核或核心组件更新，需要重启才能生效！${gl_bai}"
+            read -p "是否立即重启系统？(y/n): " reboot_choice
+            if [[ "$reboot_choice" =~ ^[yY]$ ]]; then
+                echo -e "${gl_lv}正在重启...${gl_bai}"
+                reboot
+            else
+                echo -e "${gl_huang}已取消重启，请稍后手动重启。${gl_bai}"
+            fi
+        else
+            echo -e "${gl_lv}系统更新完成！${gl_bai}"
+        fi
+    else
+        echo -e "${gl_hong}错误：未检测到 apt，本脚本仅支持 Debian/Ubuntu 系统！${gl_bai}"
+    fi
+    read -p "按回车键返回..."
 }
 
 linux_clean() {
-    echo -e "${gl_huang}清理垃圾...${gl_bai}"
-    apt autoremove --purge -y; apt clean; journalctl --vacuum-time=1s
-    echo -e "${gl_lv}完成${gl_bai}"; read -p "..."
+    echo -e "${gl_huang}正在进行系统清理...${gl_bai}"
+    if command -v apt &>/dev/null; then
+        apt autoremove --purge -y
+        apt clean -y
+        apt autoclean -y
+    else
+        echo -e "${gl_huang}未找到 apt，跳过包清理...${gl_bai}"
+    fi
+    
+    # 通用清理
+    if command -v journalctl &>/dev/null; then
+        journalctl --rotate
+        journalctl --vacuum-time=1s
+        journalctl --vacuum-size=50M
+    fi
+    
+    # 清理 /tmp 目录下超过10天未使用的文件
+    find /tmp -type f -atime +10 -delete 2>/dev/null
+    
+    echo -e "${gl_lv}清理完成！${gl_bai}"
+    read -p "按回车键返回..."
 }
 
 update_script() {
-    echo -e "${gl_huang}更新脚本...${gl_bai}"
-    curl -sS -o /usr/local/bin/x "https://raw.githubusercontent.com/OPPO518/sh/main/x.sh" && chmod +x /usr/local/bin/x && exec /usr/local/bin/x
+    echo -e "${gl_huang}正在检查并更新脚本...${gl_bai}"
+    sh_url="https://raw.githubusercontent.com/OPPO518/sh/main/x.sh"
+    if curl -sS -o /usr/local/bin/x "$sh_url"; then
+        chmod +x /usr/local/bin/x
+        echo -e "${gl_lv}更新成功！正在重启脚本...${gl_bai}"
+        sleep 1
+        exec /usr/local/bin/x
+    else
+        echo -e "${gl_hong}更新失败，请检查网络或 GitHub 链接！${gl_bai}"
+    fi
 }
 
-# ===== 主菜单 (完整版) =====
+# ===== 主菜单 (1.6 风格) =====
 main_menu() {
     while true; do
         clear
-        echo -e "${gl_kjlan}Debian VPS 运维工具箱 v2.0 (Ultimate)${gl_bai}"
-        echo "------------------------------------------------"
-        echo -e " 1. 系统初始化 (System Init)"
-        echo -e " 2. Swap 管理"
-        echo "------------------------------------------------"
-        echo -e " 3. 防火墙 (Nftables)"
-        echo -e " 4. 防暴破 (Fail2ban)"
-        echo -e " 8. 核心代理 (Xray / Sing-box) ${gl_hong}[Reality]${gl_bai}"
-        echo "------------------------------------------------"
-        echo -e " 5. 系统信息 (Info)"
-        echo -e " 6. 系统更新 (Update)"
-        echo -e " 7. 系统清理 (Clean)"
-        echo "------------------------------------------------"
-        echo -e " 9. 更新脚本 (Update Script)"
-        echo -e " 0. 退出 (Exit)"
-        echo "------------------------------------------------"
-        read -p "选项: " c
-        case "$c" in
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#                                              #"
+        echo -e "#            Debian VPS 极简运维工具箱         #"
+        echo -e "#                                              #"
+        echo -e "################################################${gl_bai}"
+        echo -e "${gl_huang}当前版本: 2.1 (Restored Classic)${gl_bai}"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
+        echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
+        echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
+        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 7.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
+        echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
+        echo -e "------------------------------------------------"
+        
+        read -p " 请输入选项 [0-9]: " choice
+
+        case "$choice" in
             1) system_initialize ;;
             2) swap_management ;;
             3) nftables_management ;;
@@ -808,11 +1121,16 @@ main_menu() {
             6) linux_update ;;
             7) linux_clean ;;
             9) update_script ;;
-            0) exit 0 ;;
-            *) echo "无效选项"; sleep 1 ;;
+            0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
+            *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
         esac
     done
 }
 
-[ "$(id -u)" != "0" ] && { echo "请使用 root 运行"; exit 1; }
+# ===== 脚本入口 =====
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${gl_hong}错误: 为了执行系统更新和清理，请使用 root 用户运行此脚本！${gl_bai}"
+    exit 1
+fi
+
 main_menu
