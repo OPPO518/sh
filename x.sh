@@ -209,19 +209,19 @@ swap_management() {
     done
 }
 
-# ===== 模块 3: Nftables 防火墙 (v1.6 修正版) =====
+# ===== 功能模块: Nftables 防火墙管理 (核心) =====
 nftables_management() {
-    # 自动检测 SSH 端口
+    # --- 内部函数: 自动检测 SSH 端口 (防自锁核心) ---
     detect_ssh_port() {
         local port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1)
         if [ -z "$port" ]; then port="22"; fi
         echo "$port"
     }
 
-    # 落地机初始化
+    # --- 内部函数: 落地机初始化 ---
     init_landing_firewall() {
         local ssh_port=$(detect_ssh_port)
-        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port}${gl_bai}"
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
         echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
         
         echo -e "正在清理冲突组件..."
@@ -237,9 +237,11 @@ nftables_management() {
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 flush ruleset
+
 table inet my_landing {
     set allowed_tcp { type inet_service; flags interval; }
     set allowed_udp { type inet_service; flags interval; }
+
     chain input {
         type filter hook input priority 0; policy drop;
         iif "lo" accept
@@ -259,10 +261,10 @@ EOF
         echo -e "${gl_lv}落地机防火墙部署完成！${gl_bai}"
     }
 
-    # 中转机初始化
+    # --- 内部函数: 中转机初始化 ---
     init_transit_firewall() {
         local ssh_port=$(detect_ssh_port)
-        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port}${gl_bai}"
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
         echo -e "${gl_kjlan}正在部署 中转机(Transit) 策略...${gl_bai}"
 
         ufw disable 2>/dev/null || true
@@ -273,18 +275,19 @@ EOF
         modprobe nft_nat 2>/dev/null
         modprobe br_netfilter 2>/dev/null
         
-        # 强制开启转发
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-transit-forward.conf
         
         cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 flush ruleset
+
 table inet my_transit {
     set local_tcp { type inet_service; flags interval; }
     set local_udp { type inet_service; flags interval; }
     map fwd_tcp { type inet_service : ipv4_addr . inet_service; }
     map fwd_udp { type inet_service : ipv4_addr . inet_service; }
+
     chain input {
         type filter hook input priority 0; policy drop;
         iif "lo" accept
@@ -295,16 +298,19 @@ table inet my_transit {
         tcp dport @local_tcp accept
         udp dport @local_udp accept
     }
+
     chain forward {
         type filter hook forward priority 0; policy accept;
         ct state established,related accept
         tcp flags syn tcp option maxseg size set 1360
     }
+
     chain prerouting {
         type nat hook prerouting priority -100; policy accept;
         dnat ip to tcp dport map @fwd_tcp
         dnat ip to udp dport map @fwd_udp
     }
+
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
         oifname != "lo" masquerade
@@ -316,7 +322,7 @@ EOF
         echo -e "${gl_lv}中转机防火墙部署完成！${gl_bai}"
     }
 
-    # 可视化列表 (Fix awk bug)
+    # --- 内部函数: 可视化列表 ---
     list_rules_ui() {
         echo -e "${gl_huang}=== 防火墙规则概览 ===${gl_bai}"
         local current_ssh=$(detect_ssh_port)
@@ -355,7 +361,7 @@ EOF
         fi
     }
 
-    # Nftables 菜单循环
+    # --- 菜单循环 ---
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
@@ -365,14 +371,21 @@ EOF
         local ssh_p=$(detect_ssh_port)
         echo -e "当前 SSH 端口: ${gl_lv}${ssh_p}${gl_bai}"
         
+        local mode="none"
+        local table=""
+        local set_tcp=""
+        local set_udp=""
+        
         if nft list tables | grep -q "my_transit"; then
             echo -e "当前模式: ${gl_kjlan}中转机 (Transit NAT)${gl_bai}"
             mode="transit"
             set_tcp="local_tcp"; set_udp="local_udp"
+            table="my_transit"
         elif nft list tables | grep -q "my_landing"; then
             echo -e "当前模式: ${gl_huang}落地机 (Landing FW)${gl_bai}"
             mode="landing"
             set_tcp="allowed_tcp"; set_udp="allowed_udp"
+            table="my_landing"
         else
             echo -e "当前模式: ${gl_hong}未初始化 / 未知${gl_bai}"
             mode="none"
@@ -383,12 +396,13 @@ EOF
             echo -e "${gl_lv} 1.${gl_bai} 初始化为：落地机防火墙 (仅放行)"
             echo -e "${gl_lv} 2.${gl_bai} 初始化为：中转机防火墙 (含转发面板)"
         else
-            echo -e "${gl_lv} 3.${gl_bai} 查看所有规则 (List Rules)"
-            echo -e "${gl_lv} 4.${gl_bai} 添加放行端口 (Allow Port)"
-            echo -e "${gl_lv} 5.${gl_bai} 删除放行端口 (Delete Port)"
+            # 序号已改为从 1 开始
+            echo -e "${gl_lv} 1.${gl_bai} 查看所有规则 (List Rules)"
+            echo -e "${gl_lv} 2.${gl_bai} 添加放行端口 (Allow Port)"
+            echo -e "${gl_lv} 3.${gl_bai} 删除放行端口 (Delete Port)"
             if [ "$mode" == "transit" ]; then
-                echo -e "${gl_kjlan} 6.${gl_bai} 添加转发规则 (Add Forward)"
-                echo -e "${gl_kjlan} 7.${gl_bai} 删除转发规则 (Del Forward)"
+                echo -e "${gl_kjlan} 4.${gl_bai} 添加转发规则 (Add Forward)"
+                echo -e "${gl_kjlan} 5.${gl_bai} 删除转发规则 (Del Forward)"
             fi
             echo -e "${gl_hong} 8.${gl_bai} 重置/切换模式 (Re-Init)"
         fi
@@ -400,64 +414,86 @@ EOF
 
         case "$nf_choice" in
             1) 
-                if [ "$mode" == "none" ]; then init_landing_firewall; else echo -e "${gl_hong}请先执行选项 8 重置！${gl_bai}"; sleep 1; fi
-                read -p "按回车继续..." ;;
+                if [ "$mode" == "none" ]; then 
+                    init_landing_firewall
+                    read -p "按回车继续..."
+                else 
+                    list_rules_ui
+                    read -p "按回车继续..." 
+                fi 
+                ;;
             2) 
-                if [ "$mode" == "none" ]; then init_transit_firewall; else echo -e "${gl_hong}请先执行选项 8 重置！${gl_bai}"; sleep 1; fi
-                read -p "按回车继续..." ;;
-            3) list_rules_ui; read -p "按回车继续..." ;;
-            4) 
-                read -p "请输入端口: " p_port
-                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
-                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
-                    nft add element inet $table $set_tcp { $p_port }
-                    nft add element inet $table $set_udp { $p_port }
-                    nft list ruleset > /etc/nftables.conf
-                    echo -e "${gl_lv}端口 $p_port 已放行。${gl_bai}"
+                if [ "$mode" == "none" ]; then 
+                    init_transit_firewall
+                    read -p "按回车继续..."
+                else 
+                    # 自动列出当前规则，方便查看
+                    list_rules_ui
+                    read -p "请输入要放行的 TCP/UDP 端口 (如 8080): " p_port
+                    if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                        nft add element inet $table $set_tcp { $p_port }
+                        nft add element inet $table $set_udp { $p_port }
+                        nft list ruleset > /etc/nftables.conf
+                        echo -e "${gl_lv}端口 $p_port 已放行。${gl_bai}"
+                    fi
+                    sleep 1
+                fi 
+                ;;
+            3) 
+                if [ "$mode" != "none" ]; then
+                    list_rules_ui
+                    read -p "请输入要删除的放行端口: " p_port
+                    if [[ "$p_port" =~ ^[0-9]+$ ]]; then
+                        nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
+                        nft delete element inet $table $set_udp { $p_port } 2>/dev/null
+                        nft list ruleset > /etc/nftables.conf
+                        echo -e "${gl_hong}端口 $p_port 已移除。${gl_bai}"
+                    fi
+                    sleep 1
                 fi
-                sleep 1
+                ;;
+            4) 
+                if [ "$mode" == "transit" ]; then
+                    list_rules_ui
+                    echo -e "请输入转发规则:"
+                    read -p "1. 本机监听端口 (如 8080): " local_p
+                    read -p "2. 目标 IP 地址 (如 1.1.1.1): " dest_ip
+                    read -p "3. 目标端口     (如 80): " dest_p
+                    
+                    if [[ -n "$local_p" && -n "$dest_ip" && -n "$dest_p" ]]; then
+                        nft add element inet my_transit fwd_tcp { $local_p : $dest_ip . $dest_p }
+                        nft add element inet my_transit fwd_udp { $local_p : $dest_ip . $dest_p }
+                        nft list ruleset > /etc/nftables.conf
+                        echo -e "${gl_lv}转发规则已添加。${gl_bai}"
+                    fi
+                    sleep 1
+                fi
                 ;;
             5)
-                read -p "请输入删除端口: " p_port
-                if [[ "$p_port" =~ ^[0-9]+$ ]]; then
-                    if [ "$mode" == "transit" ]; then table="my_transit"; else table="my_landing"; fi
-                    nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
-                    nft delete element inet $table $set_udp { $p_port } 2>/dev/null
-                    nft list ruleset > /etc/nftables.conf
-                    echo -e "${gl_hong}端口 $p_port 已移除。${gl_bai}"
-                fi
-                sleep 1
-                ;;
-            6) 
                 if [ "$mode" == "transit" ]; then
-                    read -p "本机端口: " lp; read -p "目标 IP: " dip; read -p "目标端口: " dp
-                    if [[ -n "$lp" && -n "$dip" && -n "$dp" ]]; then
-                        nft add element inet my_transit fwd_tcp { $lp : $dip . $dp }
-                        nft add element inet my_transit fwd_udp { $lp : $dip . $dp }
-                        nft list ruleset > /etc/nftables.conf
-                        echo -e "${gl_lv}规则已添加。${gl_bai}"
+                    list_rules_ui
+                    read -p "请输入要删除转发的本机端口 (如 8080): " local_p
+                    if [[ "$local_p" =~ ^[0-9]+$ ]]; then
+                         nft delete element inet my_transit fwd_tcp { $local_p } 2>/dev/null
+                         nft delete element inet my_transit fwd_udp { $local_p } 2>/dev/null
+                         nft list ruleset > /etc/nftables.conf
+                         echo -e "${gl_hong}转发规则已移除。${gl_bai}"
                     fi
+                    sleep 1
                 fi
-                sleep 1
-                ;;
-            7) 
-                if [ "$mode" == "transit" ]; then
-                    read -p "请输入删除的本机端口: " lp
-                    nft delete element inet my_transit fwd_tcp { $lp } && nft delete element inet my_transit fwd_udp { $lp } && nft list ruleset > /etc/nftables.conf && echo "OK"; sleep 1
-                    nft list ruleset > /etc/nftables.conf
-                    echo -e "${gl_hong}规则已移除。${gl_bai}"
-                fi
-                sleep 1
                 ;;
             8) 
                 echo -e "${gl_hong}注意: 这将清空所有规则！${gl_bai}"
-                read -p "确定? (y/n): " confirm
+                read -p "确定重置吗？(y/n): " confirm
                 if [[ "$confirm" == "y" ]]; then
                     echo -e "${gl_huang}正在清除...${gl_bai}"
                     nft flush ruleset
                     echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
                     echo "flush ruleset" >> /etc/nftables.conf
-                    if systemctl is-active --quiet fail2ban; then systemctl restart fail2ban; fi
+                    if systemctl is-active --quiet fail2ban; then 
+                        echo -e "${gl_huang}重启 Fail2ban 以恢复挂载...${gl_bai}"
+                        systemctl restart fail2ban
+                    fi
                     mode="none"
                     echo -e "${gl_lv}已重置。${gl_bai}"
                     sleep 1
