@@ -209,7 +209,7 @@ swap_management() {
     done
 }
 
-# ===== 功能模块: Nftables 防火墙管理 (核心) =====
+# ===== 模块 3: Nftables 防火墙管理 (核心) =====
 nftables_management() {
     # --- 内部函数: 自动检测 SSH 端口 (防自锁核心) ---
     detect_ssh_port() {
@@ -644,7 +644,7 @@ EOF
     done
 }
 
-# ===== 模块 8A: Xray 核心管理 (官方直连) =====
+# ===== 模块 5A: Xray 核心管理 (官方直连) =====
 xray_management() {
     
     BIN_PATH="/usr/local/bin/xray"
@@ -807,7 +807,7 @@ ${gl_lv}$link${gl_bai}
     done
 }
 
-# ===== 模块 8B: Sing-box 管理 =====
+# ===== 模块 5B: Sing-box 管理 =====
 singbox_management() {
     BIN_PATH="/usr/bin/sing-box"
     CONF_DIR="/etc/sing-box"
@@ -967,7 +967,7 @@ ${gl_lv}$link${gl_bai}
     done
 }
 
-# ===== 模块 8: 代理选择菜单 =====
+# ===== 模块 5: 代理选择菜单 =====
 proxy_menu() {
     while true; do
         clear
@@ -990,7 +990,7 @@ proxy_menu() {
     done
 }
 
-# ===== 模块: 系统辅助 (完整版 v1.6) =====
+# ===== 模块 6: 系统信息查询 (完整版 v1.6) =====
 linux_info() {
     clear
     echo -e "${gl_huang}正在采集系统信息...${gl_bai}"
@@ -1070,6 +1070,7 @@ linux_info() {
     read -r
 }
 
+# ===== 模块 7: 系统更新 (完整版 v1.6) =====
 linux_update() {
     echo -e "${gl_huang}正在进行系统更新...${gl_bai}"
     if command -v apt &>/dev/null; then
@@ -1095,6 +1096,7 @@ linux_update() {
     read -p "按回车键返回..."
 }
 
+# ===== 模块 8: 系统清理 (完整版 v1.6) =====
 linux_clean() {
     echo -e "${gl_huang}正在进行系统清理...${gl_bai}"
     if command -v apt &>/dev/null; then
@@ -1148,11 +1150,11 @@ main_menu() {
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
         echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
-        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "${gl_kjlan} 5.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
-        echo -e "${gl_lv} 7.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_lv} 6.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 7.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 8.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
@@ -1165,10 +1167,10 @@ main_menu() {
             2) swap_management ;;
             3) nftables_management ;;
             4) fail2ban_management ;;
-            8) proxy_menu ;;
-            5) linux_info ;;
-            6) linux_update ;;
-            7) linux_clean ;;
+            5) proxy_menu ;;
+            6) linux_info ;;
+            7) linux_update ;;
+            8) linux_clean ;;
             9) update_script ;;
             0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
             *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
