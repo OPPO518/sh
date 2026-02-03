@@ -1013,16 +1013,16 @@ EOF
         local flag=$(get_flag_local "$code")
         local link="vless://$uuid@$ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
 
-        # 4. 写入收据文件 (info.txt) - 核心修正: 使用 echo -e 强制转义颜色
+        # 4. 写入收据文件 (info.txt) - 风格美化版
+        # 注意：这里保留了 Xray 特有的 $code 和 $flag 变量
         echo -e "------------------------------------------------
-${gl_kjlan}Xray Reality 配置信息${gl_bai}
-------------------------------------------------
-地址: ${gl_bai}$ip${gl_bai}
-地区: ${gl_bai}$code $flag${gl_bai}
-端口: ${gl_bai}$port${gl_bai}
-UUID: ${gl_bai}$uuid${gl_bai}
-公钥: ${gl_bai}$pub${gl_bai}
-SID : ${gl_bai}$sid${gl_bai}
+${gl_kjlan}>>> 客户端连接信息 (Xray-core) <<<${gl_bai}
+地址 (Address): ${gl_bai}$ip${gl_bai}
+地区 (Region):  ${gl_bai}$code $flag${gl_bai}
+端口 (Port):    ${gl_bai}$port${gl_bai}
+用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
+公钥 (Public):  ${gl_bai}$pub${gl_bai}
+Short ID:       ${gl_bai}$sid${gl_bai}
 ------------------------------------------------
 ${gl_kjlan}快速导入链接:${gl_bai}
 ${gl_lv}$link${gl_bai}
@@ -1125,6 +1125,312 @@ ${gl_lv}$link${gl_bai}
         esac
     done
 }    
+
+# ===== 功能模块: Sing-box 核心管理 (高度一致版) =====
+singbox_management() {
+    
+    # 定义路径
+    BIN_PATH="/usr/bin/sing-box"
+    CONF_DIR="/etc/sing-box"
+    INFO_FILE="${CONF_DIR}/info.txt"  # 关键：配置收据
+    
+    # --- 局部函数: 获取国旗 Emoji (与 Xray 对齐) ---
+    get_flag_local() {
+        case "$1" in
+            CN) echo "🇨🇳" ;; HK) echo "🇭🇰" ;; MO) echo "🇲🇴" ;; TW) echo "🇹🇼" ;;
+            US) echo "🇺🇸" ;; JP) echo "🇯🇵" ;; KR) echo "🇰🇷" ;; SG) echo "🇸🇬" ;;
+            RU) echo "🇷🇺" ;; DE) echo "🇩🇪" ;; GB) echo "🇬🇧" ;; FR) echo "🇫🇷" ;;
+            NL) echo "🇳🇱" ;; CA) echo "🇨🇦" ;; AU) echo "🇦🇺" ;; IN) echo "🇮🇳" ;;
+            TH) echo "🇹🇭" ;; VN) echo "🇻🇳" ;; MY) echo "🇲🇾" ;; ID) echo "🇮🇩" ;;
+            BR) echo "🇧🇷" ;; ZA) echo "🇿🇦" ;; IT) echo "🇮🇹" ;; ES) echo "🇪🇸" ;;
+            *) echo "🌐" ;; 
+        esac
+    }
+
+    # --- 局部函数: 获取最新版本 ---
+    get_latest_version() {
+        local tag=$(curl -sL --max-time 5 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | head -n 1 | cut -d '"' -f 4)
+        [ -z "$tag" ] && echo "v1.12.13" || echo "$tag"
+    }
+
+    # --- 局部函数: 自动放行端口 (Sing-box 优选版) ---
+    ensure_port_open() {
+        local port="$1"
+        if ! command -v nft &>/dev/null; then return; fi
+        
+        local table=""
+        local set_tcp=""
+        local set_udp=""
+        
+        if nft list tables | grep -q "my_landing"; then
+            table="my_landing"; set_tcp="allowed_tcp"; set_udp="allowed_udp"
+        elif nft list tables | grep -q "my_transit"; then
+            table="my_transit"; set_tcp="local_tcp"; set_udp="local_udp"
+        else
+            echo -e "${gl_hong}警告: 未检测到 Nftables 表，防火墙端口未自动放行。${gl_bai}"
+            return
+        fi
+
+        if nft list set inet $table $set_tcp 2>/dev/null | grep -q "$port"; then
+            echo -e "端口 $port: ${gl_lv}已在白名单中 (Skipped)${gl_bai}"
+        else
+            echo -e "端口 $port: ${gl_huang}正在添加防火墙规则...${gl_bai}"
+            nft add element inet $table $set_tcp { $port }
+            nft add element inet $table $set_udp { $port }
+            nft list ruleset > /etc/nftables.conf
+            echo -e "${gl_lv}端口 $port 已放行。${gl_bai}"
+        fi
+    }
+
+    # --- 动作: 安装/升级 (Deb + 二进制替换) ---
+    install_singbox() {
+        echo -e "${gl_huang}正在检查系统架构...${gl_bai}"
+        local arch=$(uname -m)
+        local sb_arch=""
+        case "$arch" in
+            x86_64) sb_arch="amd64" ;;
+            aarch64) sb_arch="arm64" ;;
+            *) echo -e "${gl_hong}不支持的架构: $arch${gl_bai}"; return ;;
+        esac
+
+        local version=$(get_latest_version)
+        echo -e "检测到最新版本: ${gl_lv}${version}${gl_bai}"
+        
+        local ver_num=${version#v} 
+        local download_url="https://github.com/SagerNet/sing-box/releases/download/${version}/sing-box_${ver_num}_linux_${sb_arch}.deb"
+
+        echo -e "${gl_kjlan}正在下载 .deb 安装包...${gl_bai}"
+        if curl -L -o /tmp/sing-box.deb "$download_url"; then
+            echo -e "${gl_huang}正在安装/升级...${gl_bai}"
+            if command -v sing-box &>/dev/null; then
+                # 升级逻辑
+                echo -e "${gl_huang}>>> 执行安全升级 (保留配置)...${gl_bai}"
+                ar x /tmp/sing-box.deb data.tar.xz --output /tmp/
+                tar -xf /tmp/data.tar.xz -C /tmp/ ./usr/bin/sing-box
+                systemctl stop sing-box
+                cp -f /tmp/usr/bin/sing-box /usr/bin/sing-box
+                chmod +x /usr/bin/sing-box
+                systemctl restart sing-box
+                rm -f /tmp/sing-box.deb /tmp/data.tar.xz /tmp/usr/bin/sing-box
+                rm -rf /tmp/usr
+                echo -e "${gl_lv}Sing-box 已升级到 ${version}！${gl_bai}"
+            else
+                # 安装逻辑
+                echo -e "${gl_huang}>>> 首次安装...${gl_bai}"
+                apt install /tmp/sing-box.deb -y
+                rm -f /tmp/sing-box.deb
+                systemctl daemon-reload
+                systemctl enable sing-box
+                systemctl restart sing-box 2>/dev/null
+                echo -e "${gl_lv}安装成功！${gl_bai}"
+            fi
+            sing-box version | head -n 1
+            echo -e "------------------------------------------------"
+            echo -e "请继续执行 [2. 初始化配置] 以启用服务。"
+            echo -e "------------------------------------------------"
+        else
+            echo -e "${gl_hong}下载失败，请检查网络。${gl_bai}"
+        fi
+        read -p "按回车继续..."
+    }
+
+    # --- 动作: 初始化配置 (随机端口 + 收据模式) ---
+    configure_reality() {
+        if ! command -v sing-box &>/dev/null; then echo -e "${gl_hong}请先安装 Sing-box！${gl_bai}"; sleep 1; return; fi
+
+        # 1. 随机端口 + 防火墙
+        local port=$(shuf -i 20000-65000 -n 1)
+        ensure_port_open "$port"
+
+        echo -e "${gl_huang}正在生成配置...${gl_bai}"
+
+        # 2. 生成变量
+        local uuid=$(sing-box generate uuid)
+        local key_pair=$(sing-box generate reality-keypair)
+        local private_key=$(echo "$key_pair" | grep "PrivateKey" | awk '{print $2}')
+        local public_key=$(echo "$key_pair" | grep "PublicKey" | awk '{print $2}')
+        # 统一使用 16 位 Hex (8 bytes)，与 Xray 视觉对齐
+        local short_id=$(openssl rand -hex 8) 
+        local server_name="www.microsoft.com"
+        
+        # 3. 写入 config.json
+        cat > ${CONF_DIR}/config.json << EOF
+{
+  "log": { "level": "info", "timestamp": true },
+  "inbounds": [
+    {
+      "type": "vless", "tag": "vless-in", "listen": "::", "listen_port": $port,
+      "users": [ { "uuid": "$uuid", "flow": "xtls-rprx-vision" } ],
+      "tls": {
+        "enabled": true, "server_name": "$server_name",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "$server_name", "server_port": 443 },
+          "private_key": "$private_key",
+          "short_id": [ "$short_id" ]
+        }
+      }
+    }
+  ]
+}
+EOF
+        # 4. 生成并保存收据 (info.txt) - 与 Xray 100% 对齐
+        echo -e "${gl_huang}保存配置收据...${gl_bai}"
+        
+        # 校验配置
+        if ! sing-box check -c ${CONF_DIR}/config.json >/dev/null; then
+             echo -e "${gl_hong}配置文件生成错误！${gl_bai}"; read -p "..."; return
+        fi
+
+        local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
+        local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
+        local flag=$(get_flag_local "$code")
+        local link="vless://$uuid@$ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$server_name&fp=chrome&pbk=$public_key&sid=$short_id&type=tcp&headerType=none#${flag}SingBox-Reality"
+
+        # 生成并保存收据 (info.txt) - 样式美化 + 修复颜色
+        echo -e "------------------------------------------------
+${gl_kjlan}>>> 客户端连接信息 (Sing-box) <<<${gl_bai}
+地址 (Address): ${gl_bai}$ip${gl_bai}
+地区 (Region):  ${gl_bai}$code $flag${gl_bai}
+端口 (Port):    ${gl_bai}$port${gl_bai}
+用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
+公钥 (Public):  ${gl_bai}$public_key${gl_bai}
+Short ID:       ${gl_bai}$short_id${gl_bai}
+------------------------------------------------
+${gl_kjlan}快速导入链接:${gl_bai}
+${gl_lv}$link${gl_bai}
+------------------------------------------------" > $INFO_FILE
+        systemctl restart sing-box
+        view_config
+    }
+
+    # --- 动作: 查看配置 (读取 info.txt) ---
+    view_config() {
+        if [ -f "$INFO_FILE" ]; then
+            clear
+            # 这里的 echo -e 是为了确保 cat 出来的文件里包含的颜色代码被正确解析(双重保险)
+            # 但实际上 cat $INFO_FILE 足矣，只要写入时没问题
+            cat $INFO_FILE
+        else
+            echo -e "${gl_hong}未找到配置信息！请先执行 [2. 初始化配置]${gl_bai}"
+        fi
+        
+        if [ "${FUNCNAME[1]}" != "configure_reality" ]; then 
+            read -p "按回车返回..."
+        fi
+    }
+
+    # --- 动作: 卸载 ---
+    uninstall_singbox() {
+        echo -e "${gl_hong}警告: 这将删除 Sing-box 程序、配置及日志！${gl_bai}"
+        read -p "确认卸载? (y/n): " confirm
+        if [[ "$confirm" == "y" ]]; then
+            echo -e "${gl_huang}正在卸载...${gl_bai}"
+            systemctl stop sing-box
+            apt purge sing-box -y
+            rm -rf $CONF_DIR
+            rm -f /usr/bin/sing-box
+            echo -e "${gl_lv}Sing-box 已彻底卸载。${gl_bai}"
+        else
+            echo "已取消。"
+        fi
+        read -p "按回车继续..."
+    }
+
+    # --- 模块主循环 (菜单顺序与 Xray 对齐) ---
+    while true; do
+        clear
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#           Sing-box 核心管理 (Reality)        #"
+        echo -e "################################################${gl_bai}"
+        
+        if systemctl is-active --quiet sing-box; then
+            local ver=$(sing-box version | head -n 1 | awk '{print $3}')
+            echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: $ver)"
+        else
+            if command -v sing-box &>/dev/null; then
+                echo -e "状态: ${gl_hong}● 已停止${gl_bai}"
+            else
+                echo -e "状态: ${gl_hong}● 未安装${gl_bai}"
+            fi
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_lv} 1.${gl_bai} 安装/升级 (Install/Update)"
+        echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Reset Config)"
+        echo -e "${gl_huang} 3.${gl_bai} 查看当前配置 (View Info)"
+        echo -e "------------------------------------------------"
+        echo -e " 4. 查看日志 (Snapshot)"
+        echo -e " 5. 重启服务 (Restart)"
+        echo -e " 6. 停止服务 (Stop)"
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hong} 9.${gl_bai} 彻底卸载 (Uninstall)"
+        echo -e "${gl_hui} 0.${gl_bai} 返回上级菜单"
+        echo -e "------------------------------------------------"
+        
+        read -p "请输入选项: " sb_choice
+
+        case "$sb_choice" in
+            1) install_singbox ;;
+            2) configure_reality ;;
+            3) view_config ;;
+            4)
+                echo -e "${gl_huang}正在实时监控 Sing-box 日志 (显示最后 20 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                journalctl -u sing-box -n 20 -f &
+                local tail_pid=$!
+                read -r
+                kill $tail_pid >/dev/null 2>&1
+                wait $tail_pid 2>/dev/null
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
+                ;;
+            5) systemctl restart sing-box; echo -e "${gl_lv}已重启${gl_bai}"; sleep 1 ;;
+            6) systemctl stop sing-box; echo -e "${gl_hong}已停止${gl_bai}"; sleep 1 ;;
+            9) uninstall_singbox ;;
+            0) return ;;
+            *) echo "无效选项" ;;
+        esac
+    done
+}
+
+# ===== 功能模块: 代理服务总菜单 (中间层) =====
+proxy_menu() {
+    while true; do
+        clear
+        echo -e "${gl_kjlan}################################################"
+        echo -e "#            代理服务选择 (Proxy Selection)    #"
+        echo -e "################################################${gl_bai}"
+        echo -e "${gl_hui}请选择您要管理的核心内核：${gl_bai}"
+        echo -e "------------------------------------------------"
+        
+        # 动态检测运行状态
+        if systemctl is-active --quiet xray; then
+            echo -e "${gl_lv} 1.${gl_bai} Xray-core     ${gl_lv}[运行中]${gl_bai}"
+        else
+            echo -e "${gl_lv} 1.${gl_bai} Xray-core     ${gl_hui}[未运行]${gl_bai}"
+        fi
+        
+        if systemctl is-active --quiet sing-box; then
+            echo -e "${gl_kjlan} 2.${gl_bai} Sing-box      ${gl_lv}[运行中]${gl_bai}"
+        else
+            echo -e "${gl_kjlan} 2.${gl_bai} Sing-box      ${gl_hui}[未运行]${gl_bai}"
+        fi
+        
+        echo -e "------------------------------------------------"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        echo -e "------------------------------------------------"
+        
+        read -p "请输入选项: " p_choice
+        case "$p_choice" in
+            1) xray_management ;;      # 进入 Xray 内部菜单
+            2) singbox_management ;;   # 进入 Sing-box 内部菜单
+            0) return ;;               # 退出循环，自动回到 main_menu
+            *) echo "无效选项" ;;
+        esac
+    done
+}
 
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
@@ -1295,7 +1601,7 @@ main_menu() {
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
         echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
-        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray-core) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
         echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
@@ -1312,7 +1618,7 @@ main_menu() {
             2) swap_management ;;
             3) nftables_management ;;
             4) fail2ban_management ;;
-            8) xray_management ;;
+            8) proxy_menu ;;
             5) linux_info; break_end ;;
             6) linux_update; break_end ;;
             7) linux_clean; break_end ;;
