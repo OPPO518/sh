@@ -884,14 +884,13 @@ EOF
     done
 }
 
-# ===== 功能模块: Xray 核心管理 (官方标准版) =====
+# ===== 功能模块: Xray 核心管理 (最终修正版) =====
 xray_management() {
     
     # 定义标准路径 (遵循 FHS)
     BIN_PATH="/usr/local/bin/xray"
     CONF_DIR="/usr/local/etc/xray"
-    CONF_FILE="${CONF_DIR}/config.json"
-    PUB_KEY_FILE="${CONF_DIR}/.public.key" # 隐藏文件存储公钥
+    INFO_FILE="${CONF_DIR}/info.txt"  # 关键：配置信息的“收据”
     
     # --- 局部函数: 获取国旗 Emoji ---
     get_flag_local() {
@@ -940,43 +939,29 @@ xray_management() {
         read -p "按回车继续..."
     }
 
-    # --- 动作: 初始化配置 (适配 v26 特殊输出版) ---
+    # --- 动作: 初始化配置 (生成即保存，拒绝分析) ---
     configure_reality() {
-        [ ! -f "/usr/local/bin/xray" ] && { echo "请先安装 Xray"; sleep 1; return; }
+        if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
         ensure_port_open
         echo -e "${gl_huang}正在生成配置...${gl_bai}"
         
-        # 1. 生成 UUID
-        local uuid=$(/usr/local/bin/xray uuid)
+        # 1. 生成变量 (内存中绝对正确)
+        local uuid=$($BIN_PATH uuid)
+        local kp=$($BIN_PATH x25519)
         
-        # 2. 生成密钥 (Capture output)
-        local kp=$(/usr/local/bin/xray x25519)
-        
-        # 3. 智能抓取密钥 (兼容标准版和特殊版)
-        # 先抓私钥 (PrivateKey 或 Private key)
+        # 抓取密钥 (兼容 Public key 和 Password)
         local pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
-        
-        # 再抓公钥 (优先抓 Public key，抓不到就抓 Password)
         local pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
-        if [ -z "$pub" ]; then
-            # 如果没抓到 Public，尝试抓 Password (针对你现在的版本)
-            pub=$(echo "$kp" | grep -i "Password" | cut -d: -f2 | tr -d '[:space:]')
-        fi
+        [ -z "$pub" ] && pub=$(echo "$kp" | grep -i "Password" | cut -d: -f2 | tr -d '[:space:]')
         
-        # 4. 生成 ShortId (8位字符)
+        # 生成 16 位 ShortId
         local sid=$(openssl rand -hex 8)
+
+        if [ -z "$pub" ]; then echo -e "${gl_hong}密钥生成失败: $kp${gl_bai}"; read -p "..."; return; fi
         
-        # 5. 最终检查
-        if [ -z "$pub" ]; then 
-            echo -e "${gl_hong}无法识别密钥格式！${gl_bai}"
-            echo -e "原始输出: \n$kp"
-            read -p "按回车返回..."
-            return 
-        fi
-        
-        # 写入 config.json
-        mkdir -p /usr/local/etc/xray
-        cat > /usr/local/etc/xray/config.json << EOF
+        # 2. 写入 Xray 配置文件 (config.json)
+        mkdir -p $CONF_DIR
+        cat > ${CONF_DIR}/config.json << EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
@@ -997,72 +982,56 @@ xray_management() {
   "routing": { "domainStrategy": "IPIfNonMatch", "rules": [ { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" } ] }
 }
 EOF
-        # 保存公钥用于查看
-        echo "$pub" > /usr/local/etc/xray/.public.key
         
-        systemctl restart xray
-        
-        # 直接调用查看功能
-        view_config_action
-    }
-
-    # --- 动作: 查看配置 (实时计算 + 读取公钥) ---
-    view_config_action() {
-        if [ ! -f "$CONF_FILE" ] || [ ! -f "$PUB_KEY_FILE" ]; then
-            echo -e "${gl_hong}未找到配置文件！请先执行 [2. 初始化配置]${gl_bai}"
-            read -p "按回车返回..."
-            return
-        fi
-
-        clear
-        echo -e "${gl_huang}正在读取配置...${gl_bai}"
-        
-        # 1. 从 config.json 提取 UUID (使用 grep 和 cut，不依赖 jq)
-        local uuid=$(grep '"id":' $CONF_FILE | cut -d'"' -f4)
-        
-        # 2. 从 .public.key 读取公钥
-        local pub=$(cat $PUB_KEY_FILE)
-        
-        # 3. 从 config.json 提取 ShortId
-        local sid=$(grep '"shortIds":' $CONF_FILE -A 1 | grep '"' | cut -d'"' -f2)
-        
-        # 4. 获取 IP 和 国旗
+        # 3. 核心步骤：直接保存连接信息到 info.txt (不再去读 config.json)
+        echo -e "${gl_huang}保存配置收据...${gl_bai}"
         local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
         local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
         local flag=$(get_flag_local "$code")
-        
-        # 5. 拼装链接
         local link="vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
+
+        cat > $INFO_FILE << EOF
+------------------------------------------------
+${gl_kjlan}Xray Reality 配置信息${gl_bai}
+地址: ${gl_bai}$ip${gl_bai}
+地区: ${gl_bai}$code $flag${gl_bai}
+端口: ${gl_bai}52368${gl_bai}
+UUID: ${gl_bai}$uuid${gl_bai}
+公钥: ${gl_bai}$pub${gl_bai}
+SID:  ${gl_bai}$sid${gl_bai}
+------------------------------------------------
+链接: ${gl_lv}$link${gl_bai}
+------------------------------------------------
+EOF
         
-        echo -e "------------------------------------------------"
-        echo -e "${gl_kjlan}Xray Reality 配置信息${gl_bai}"
-        echo -e "状态: $(systemctl is-active xray)"
-        echo -e "------------------------------------------------"
-        echo -e "地址: ${gl_bai}$ip${gl_bai}"
-        echo -e "地区: ${gl_bai}$code $flag${gl_bai}"
-        echo -e "端口: ${gl_bai}52368${gl_bai}"
-        echo -e "UUID: ${gl_bai}$uuid${gl_bai}"
-        echo -e "公钥: ${gl_bai}$pub${gl_bai}"
-        echo -e "SID:  ${gl_bai}$sid${gl_bai}"
-        echo -e "------------------------------------------------"
-        echo -e "链接: ${gl_lv}$link${gl_bai}"
-        echo -e "------------------------------------------------"
+        systemctl restart xray
+        # 直接调用查看功能
+        view_config
+    }
+
+    # --- 动作: 查看配置 (只读收据) ---
+    view_config() {
+        if [ -f "$INFO_FILE" ]; then
+            clear
+            cat $INFO_FILE
+        else
+            echo -e "${gl_hong}未找到配置信息！请先执行 [2. 初始化配置]${gl_bai}"
+        fi
         
-        # 只有在直接调用时才暂停，被 configure_reality 调用时不暂停
-        if [ "${FUNCNAME[1]}" != "configure_reality" ]; then
+        # 逻辑判断：避免重复暂停
+        if [ "${FUNCNAME[1]}" != "configure_reality" ]; then 
             read -p "按回车返回..."
         fi
     }
 
-    # --- 动作: 卸载 (彻底清除) ---
+    # --- 动作: 卸载 ---
     uninstall_xray() {
         echo -e "${gl_hong}警告: 这将删除 Xray 程序、配置及日志！${gl_bai}"
         read -p "确认卸载? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then
             echo -e "${gl_huang}正在调用官方脚本卸载...${gl_bai}"
-            # 使用 --purge 参数彻底清除
             bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
-            rm -rf $CONF_DIR # 双重保险
+            rm -rf $CONF_DIR
             echo -e "${gl_lv}Xray 已彻底卸载。${gl_bai}"
         else
             echo "已取消"
@@ -1102,7 +1071,7 @@ EOF
         case "$choice" in
             1) install_xray ;;
             2) configure_reality ;;
-            3) view_config_action ;;
+            3) view_config ;;
             4) 
                 echo -e "${gl_huang}日志快照 (最后 50 行):${gl_bai}"
                 journalctl -u xray -n 50 --no-pager
@@ -1115,7 +1084,7 @@ EOF
             *) echo "无效选项" ;;
         esac
     done
-}
+}    
 
 # ===== 功能 1: 系统信息查询 (已移除统计代码) =====
 linux_info() {
