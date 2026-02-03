@@ -910,10 +910,10 @@ xray_management() {
         if command -v nft &>/dev/null; then
             if nft list tables | grep -q "my_landing"; then t="my_landing"; s="allowed_tcp"; su="allowed_udp";
             elif nft list tables | grep -q "my_transit"; then t="my_transit"; s="local_tcp"; su="local_udp"; else return; fi
-            if ! nft list set inet $t $s 2>/dev/null | grep -q "52368"; then
-                echo -e "${gl_huang}防火墙放行端口 52368...${gl_bai}"
-                nft add element inet $t $s { 52368 }
-                nft add element inet $t $su { 52368 }
+            if ! nft list set inet $t $s 2>/dev/null | grep -q "$1"; then
+                echo -e "${gl_huang}防火墙放行端口 "$1"...${gl_bai}"
+                nft add element inet $t $s { $1 }
+                nft add element inet $t $su { $1 }
                 nft list ruleset > /etc/nftables.conf
             fi
         fi
@@ -942,7 +942,13 @@ xray_management() {
     # --- 动作: 初始化配置 (生成即保存，拒绝分析) ---
     configure_reality() {
         if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
-        ensure_port_open
+        
+        # 1. 先生成随机端口 (20000-65000)
+        local port=$(shuf -i 20000-65000 -n 1)
+
+        # 2. 再把这个端口传给防火墙函数
+        ensure_port_open "$port"
+
         echo -e "${gl_huang}正在生成配置...${gl_bai}"
         
         # 1. 生成变量 (内存中绝对正确)
@@ -966,7 +972,7 @@ xray_management() {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "port": 52368, "protocol": "vless",
+      "port": $port, "protocol": "vless",
       "settings": { "clients": [ { "id": "$uuid", "flow": "xtls-rprx-vision" } ], "decryption": "none" },
       "streamSettings": {
         "network": "tcp", "security": "reality",
@@ -988,7 +994,7 @@ EOF
         local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
         local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
         local flag=$(get_flag_local "$code")
-        local link="vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
+        local link="vless://$uuid@$ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
 
         # 4. 写入收据文件 (info.txt) - 核心修正: 使用 echo -e 强制转义颜色
         echo -e "------------------------------------------------
@@ -996,7 +1002,7 @@ ${gl_kjlan}Xray Reality 配置信息${gl_bai}
 ------------------------------------------------
 地址: ${gl_bai}$ip${gl_bai}
 地区: ${gl_bai}$code $flag${gl_bai}
-端口: ${gl_bai}52368${gl_bai}
+端口: ${gl_bai}$port${gl_bai}
 UUID: ${gl_bai}$uuid${gl_bai}
 公钥: ${gl_bai}$pub${gl_bai}
 SID : ${gl_bai}$sid${gl_bai}
@@ -1074,9 +1080,25 @@ ${gl_lv}$link${gl_bai}
             2) configure_reality ;;
             3) view_config ;;
             4) 
-                echo -e "${gl_huang}日志快照 (最后 50 行):${gl_bai}"
-                journalctl -u xray -n 50 --no-pager
-                read -p "按回车返回..." 
+                echo -e "${gl_huang}正在实时监控 Xray 日志 (显示最后 20 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                
+                # 关键修改：加入 -f 参数实现动态追踪，并放入后台运行 (&)
+                journalctl -u xray -f -n 20 &
+                
+                # 获取刚才后台运行的 journalctl 的进程 ID
+                local log_pid=$!
+                
+                # 暂停脚本，单纯等待用户按回车
+                read -r
+                
+                # 用户按回车后，杀掉日志进程，停止输出
+                kill $log_pid >/dev/null 2>&1
+                wait $log_pid 2>/dev/null
+                
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
                 ;;
             5) systemctl restart xray; echo -e "${gl_lv}服务已重启${gl_bai}"; sleep 1 ;;
             6) systemctl stop xray; echo -e "${gl_hong}服务已停止${gl_bai}"; sleep 1 ;;
@@ -1249,7 +1271,7 @@ main_menu() {
         echo -e "#            Debian VPS 极简运维工具箱         #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 1.6 (Final Release)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 1.0 (Final Release)${gl_bai}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
