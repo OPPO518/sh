@@ -322,7 +322,7 @@ EOF
         echo -e "${gl_lv}中转机防火墙部署完成！${gl_bai}"
     }
 
-    # --- 内部函数: 可视化列表 ---
+    # --- 内部函数: 可视化列表 (修复转发显示) ---
     list_rules_ui() {
         echo -e "${gl_huang}=== 防火墙规则概览 ===${gl_bai}"
         local current_ssh=$(detect_ssh_port)
@@ -349,18 +349,19 @@ EOF
         echo -e "[UDP] ${gl_kjlan}${udp_list:-无}${gl_bai}"
         echo "------------------------------------------------"
         
+        # [核心修复区域] 转发规则显示逻辑
         if [ "$table_name" == "my_transit" ]; then
             echo -e "${gl_kjlan}=== 端口转发规则 ===${gl_bai}"
             echo "--- TCP 转发 ---"
-            local tcp_fwd=$(nft list map inet my_transit fwd_tcp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
-            if [ -z "$tcp_fwd" ]; then echo "无"; else echo "$tcp_fwd"; fi
+            # 使用循环寻找冒号(:)，无视 'elements =' 和缩进
+            nft list map inet my_transit fwd_tcp 2>/dev/null | grep -v 'type' | tr -d '{},=' | awk '{for(i=1;i<=NF;i++) if($i==":") printf "TCP %-6s -> %s : %s\n", $(i-1), $(i+1), $(i+3)}'
+            
             echo "--- UDP 转发 ---"
-            local udp_fwd=$(nft list map inet my_transit fwd_udp | grep ':' | tr -d '\t,' | awk '{printf "Port %-6s -> %s : %s\n", $1, $3, $5}')
-            if [ -z "$udp_fwd" ]; then echo "无"; else echo "$udp_fwd"; fi
+            nft list map inet my_transit fwd_udp 2>/dev/null | grep -v 'type' | tr -d '{},=' | awk '{for(i=1;i<=NF;i++) if($i==":") printf "UDP %-6s -> %s : %s\n", $(i-1), $(i+1), $(i+3)}'
             echo "------------------------------------------------"
         fi
     }
-
+    
     # --- 菜单循环 ---
     while true; do
         clear
