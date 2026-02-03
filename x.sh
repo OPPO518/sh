@@ -726,8 +726,8 @@ EOF
 
         echo -e "------------------------------------------------
 ${gl_kjlan}>>> 客户端连接信息 (Xray-core) <<<${gl_bai}
+地区 (Region):  ${gl_bai}$flag$ $code{gl_bai}
 地址 (Address): ${gl_bai}$ip${gl_bai}
-地区 (Region):  ${gl_bai}$code $flag${gl_bai}
 端口 (Port):    ${gl_bai}$port${gl_bai}
 用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
 公钥 (Public):  ${gl_bai}$pub${gl_bai}
@@ -904,8 +904,8 @@ EOF
 
         echo -e "------------------------------------------------
 ${gl_kjlan}>>> 客户端连接信息 (Sing-box) <<<${gl_bai}
+地区 (Region):  ${gl_bai}$flag$ $code{gl_bai}
 地址 (Address): ${gl_bai}$ip${gl_bai}
-地区 (Region):  ${gl_bai}$code $flag${gl_bai}
 端口 (Port):    ${gl_bai}$port${gl_bai}
 用户ID (UUID):  ${gl_bai}$uuid${gl_bai}
 公钥 (Public):  ${gl_bai}$pub${gl_bai}
@@ -1032,7 +1032,7 @@ linux_info() {
     echo ""
     echo -e "${gl_lv}系统信息概览${gl_bai}"
     echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($country_code $flag)"
+    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($flag $country_code)"
     echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
     echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
     echo -e "${gl_kjlan}-------------"
