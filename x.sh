@@ -14,10 +14,11 @@ gl_lv='\033[32m'
 gl_huang='\033[33m'
 gl_lan='\033[34m'
 gl_bai='\033[0m'
+gl_zi='\033[35m'
 gl_kjlan='\033[96m'
 gl_hui='\e[37m'
 
-# ===== 辅助函数: 获取国旗 Emoji (全局) =====
+# ===== 全局辅助: 获取国旗 Emoji (优化: 全局定义，减少冗余) =====
 get_flag_local() {
     case "$1" in
         CN) echo "🇨🇳" ;; HK) echo "🇭🇰" ;; MO) echo "🇲🇴" ;; TW) echo "🇹🇼" ;;
@@ -30,19 +31,25 @@ get_flag_local() {
     esac
 }
 
-# ===== 辅助函数: 系统信息收集 =====
+# ===== 辅助函数: IP信息获取 =====
 ip_address() {
-    public_ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
-    [ -z "$public_ip" ] && public_ip=$(hostname -I | awk '{print $1}')
+    get_public_ip() { curl -s https://ipinfo.io/ip && echo; }
+    get_local_ip() { ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[^ ]+' || hostname -I 2>/dev/null | awk '{print $1}'; }
+    public_ip=$(get_public_ip)
+    isp_info=$(curl -s --max-time 3 http://ipinfo.io/org)
+    if echo "$isp_info" | grep -Eiq 'mobile|unicom|telecom'; then ipv4_address=$(get_local_ip); else ipv4_address="$public_ip"; fi
+    ipv6_address=$(curl -s --max-time 1 https://v6.ipinfo.io/ip && echo)
+    # 增加国家代码获取，供全局使用
     country_code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
     flag=$(get_flag_local "$country_code")
 }
 
+# ===== 辅助函数: 网络流量统计 =====
 output_status() {
     output=$(awk 'BEGIN { rx_total = 0; tx_total = 0 }
         $1 ~ /^(eth|ens|enp|eno)[0-9]+/ { rx_total += $2; tx_total += $10 }
         END {
-            rx_units = "B"; tx_units = "B";
+            rx_units = "Bytes"; tx_units = "Bytes";
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "K"; }
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "M"; }
             if (rx_total > 1024) { rx_total /= 1024; rx_units = "G"; }
@@ -55,12 +62,12 @@ output_status() {
     tx=$(echo "$output" | awk '{print $2}')
 }
 
-# ===== 辅助函数：时区检测 =====
+# ===== 辅助函数: 时区检测 =====
 current_timezone() {
     if grep -q 'Alpine' /etc/issue; then date +"%Z %z"; else timedatectl | grep "Time zone" | awk '{print $3}'; fi
 }
 
-# ===== 模块 1: 系统初始化 =====
+# ===== 模块 1: 系统初始化 (v1.6 逻辑) =====
 system_initialize() {
     clear
     echo -e "${gl_kjlan}################################################"
@@ -70,9 +77,9 @@ system_initialize() {
     local os_ver=""
     if grep -q "bullseye" /etc/os-release; then os_ver="11"; echo -e "当前系统: ${gl_huang}Debian 11 (Bullseye)${gl_bai}";
     elif grep -q "bookworm" /etc/os-release; then os_ver="12"; echo -e "当前系统: ${gl_huang}Debian 12 (Bookworm)${gl_bai}";
-    else echo -e "${gl_hong}错误: 仅支持 Debian 11/12${gl_bai}"; read -p "按回车返回..."; return; fi
+    else echo -e "${gl_hong}错误: 本脚本仅支持 Debian 11 或 12 系统！${gl_bai}"; read -p "按回车返回..."; return; fi
     
-    echo -e "${gl_hui}* 包含换源、BBR、时区及防火墙内核参数${gl_bai}"
+    echo -e "${gl_hui}* 包含换源、BBR、时区及落地/中转环境配置${gl_bai}"
     echo -e "------------------------------------------------"
     echo -e "请设定当前 VPS 的业务角色："
     echo -e "${gl_lv} 1.${gl_bai} 落地机 (Landing)  -> [关闭转发 | 极简安全]"
@@ -84,7 +91,6 @@ system_initialize() {
 
     echo -e "${gl_kjlan}>>> 正在执行初始化...${gl_bai}"
     
-    # 换源与基础软件
     [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
     if [ "$os_ver" == "11" ]; then
         echo -e "deb http://deb.debian.org/debian bullseye main contrib non-free
@@ -102,7 +108,6 @@ deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-f
     apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
     apt install curl wget systemd-timesyncd socat cron rsync unzip -y
 
-    # 内核参数配置
     rm -f /etc/sysctl.d/99-vps-optimize.conf
     cat > /etc/sysctl.d/99-vps-optimize.conf << EOF
 # BBR
@@ -115,11 +120,9 @@ net.nf_conntrack_max=1000000
 EOF
     
     if [ "$role_choice" == "1" ]; then
-        # 落地机策略
         echo "net.ipv4.ip_forward=0" >> /etc/sysctl.d/99-vps-optimize.conf
         echo "net.ipv6.conf.all.forwarding=0" >> /etc/sysctl.d/99-vps-optimize.conf
     else
-        # 中转机策略
         modprobe nft_nat 2>/dev/null; modprobe br_netfilter 2>/dev/null
         echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-vps-optimize.conf
         echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.d/99-vps-optimize.conf
@@ -132,14 +135,15 @@ EOF
     
     echo -e "${gl_lv}初始化完成！${gl_bai}"
     if [ -f /var/run/reboot-required ]; then
-        read -p "系统内核已更新，是否重启? (y/n): " rb
+        echo -e "${gl_hong}!!! 检测到内核更新，必须重启 !!!${gl_bai}"
+        read -p "是否立即重启? (y/n): " rb
         [[ "$rb" =~ ^[yY]$ ]] && reboot
     else
         read -p "按回车返回..."
     fi
 }
 
-# ===== 模块 2: Swap 管理 =====
+# ===== 模块 2: Swap 管理 (v1.6 逻辑) =====
 swap_management() {
     while true; do
         clear
@@ -147,7 +151,11 @@ swap_management() {
         echo -e "#            Swap 虚拟内存管理                     #"
         echo -e "################################################${gl_bai}"
         local swap_total=$(free -m | grep Swap | awk '{print $2}')
-        echo -e "当前 Swap: ${gl_huang}${swap_total}MB${gl_bai}"
+        if [ "$swap_total" -eq 0 ]; then
+             echo -e "当前状态: ${gl_hong}未启用${gl_bai}"
+        else
+             echo -e "当前状态: ${gl_lv}已启用${gl_bai} | 大小: ${gl_huang}${swap_total}MB${gl_bai}"
+        fi
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 设置/扩容 Swap"
         echo -e "${gl_hong} 2.${gl_bai} 关闭/删除 Swap"
@@ -173,7 +181,7 @@ swap_management() {
     done
 }
 
-# ===== 模块 3: Nftables 防火墙 =====
+# ===== 模块 3: Nftables 防火墙 (v1.6 逻辑 + 修复菜单Bug) =====
 nftables_management() {
     detect_ssh() { ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1 || echo 22; }
     
@@ -182,7 +190,6 @@ nftables_management() {
         echo -e "${gl_huang}清理环境...${gl_bai}"
         ufw disable 2>/dev/null; apt purge ufw -y 2>/dev/null
         
-        # 强制同步内核参数
         if [ "$type" == "landing" ]; then
             sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
         else
@@ -280,8 +287,9 @@ EOF
         echo -e "------------------------------------------------"
         read -p "选项: " c
         case "$c" in
-            1) init_fw landing ;;
-            2) init_fw transit ;;
+            # [修复]: 增加状态判断，防止误触不可见菜单
+            1) if [ "$mode" == "None" ]; then init_fw landing; else echo -e "${gl_hong}请先重置!${gl_bai}"; sleep 1; fi ;;
+            2) if [ "$mode" == "None" ]; then init_fw transit; else echo -e "${gl_hong}请先重置!${gl_bai}"; sleep 1; fi ;;
             3) list_rules_ui; read -p "..." ;;
             4) read -p "端口: " p; nft add element inet $table $set { $p }; nft add element inet $table ${set/tcp/udp} { $p }; nft list ruleset > /etc/nftables.conf; echo "OK"; sleep 1 ;;
             5) read -p "端口: " p; nft delete element inet $table $set { $p }; nft delete element inet $table ${set/tcp/udp} { $p }; nft list ruleset > /etc/nftables.conf; echo "OK"; sleep 1 ;;
@@ -295,7 +303,7 @@ EOF
     done
 }
 
-# ===== 模块 4: Fail2ban =====
+# ===== 模块 4: Fail2ban (v1.6 逻辑) =====
 fail2ban_management() {
     install_f2b() {
         echo -e "${gl_huang}安装 Fail2ban...${gl_bai}"
@@ -354,9 +362,8 @@ EOF
     done
 }
 
-# ===== 模块 8A: Xray 核心管理 =====
+# ===== 模块 8A: Xray 管理 (收据模式 + 自动端口) =====
 xray_management() {
-    
     BIN_PATH="/usr/local/bin/xray"
     CONF_DIR="/usr/local/etc/xray"
     INFO_FILE="${CONF_DIR}/info.txt"
@@ -375,31 +382,29 @@ xray_management() {
     }
 
     install_xray() {
-        echo -e "${gl_huang}正在调用官方脚本安装 (User=root)...${gl_bai}"
+        echo -e "${gl_huang}调用官方脚本安装 (Install Latest)...${gl_bai}"
         bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
         if [ $? -eq 0 ]; then
-            echo -e "${gl_lv}安装/升级成功！${gl_bai}"; $BIN_PATH version | head -n 1
+            echo -e "${gl_lv}安装成功！${gl_bai}"; $BIN_PATH version | head -n 1
         else
-            echo -e "${gl_hong}安装失败！(网络问题)${gl_bai}"
+            echo -e "${gl_hong}安装失败 (网络问题)${gl_bai}"; 
         fi
         read -p "按回车继续..."
     }
 
     configure_reality() {
-        if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
+        [ ! -f "$BIN_PATH" ] && { echo "请先安装 Xray"; sleep 1; return; }
         
         local port=$(shuf -i 20000-65000 -n 1)
         ensure_port_open "$port"
-        echo -e "${gl_huang}正在生成配置...${gl_bai}"
+        echo -e "${gl_huang}生成配置中...${gl_bai}"
         
-        local uuid=$($BIN_PATH uuid)
-        local kp=$($BIN_PATH x25519)
-        local pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
-        local pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
+        uuid=$($BIN_PATH uuid)
+        kp=$($BIN_PATH x25519)
+        pri=$(echo "$kp" | grep -i "Private" | cut -d: -f2 | tr -d '[:space:]')
+        pub=$(echo "$kp" | grep -i "Public" | cut -d: -f2 | tr -d '[:space:]')
         [ -z "$pub" ] && pub=$(echo "$kp" | grep -i "Password" | cut -d: -f2 | tr -d '[:space:]')
-        local sid=$(openssl rand -hex 8)
-
-        if [ -z "$pub" ]; then echo -e "${gl_hong}密钥生成失败: $kp${gl_bai}"; read -p "..."; return; fi
+        sid=$(openssl rand -hex 8)
         
         mkdir -p $CONF_DIR
         cat > ${CONF_DIR}/config.json << EOF
@@ -423,7 +428,7 @@ xray_management() {
   "routing": { "domainStrategy": "IPIfNonMatch", "rules": [ { "type": "field", "ip": [ "geoip:private" ], "outboundTag": "block" } ] }
 }
 EOF
-        echo -e "${gl_huang}正在保存连接信息...${gl_bai}"
+        echo -e "${gl_huang}保存配置收据...${gl_bai}"
         local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
         local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
         local flag=$(get_flag_local "$code")
@@ -447,20 +452,15 @@ ${gl_lv}$link${gl_bai}
     }
 
     view_config() {
-        if [ -f "$INFO_FILE" ]; then clear; cat $INFO_FILE; else echo -e "${gl_hong}未找到配置信息，请先初始化！${gl_bai}"; fi
+        if [ -f "$INFO_FILE" ]; then clear; cat $INFO_FILE; else echo -e "${gl_hong}未找到配置，请先初始化${gl_bai}"; fi
         [ "${FUNCNAME[1]}" != "configure_reality" ] && read -p "按回车返回..."
     }
 
     uninstall_xray() {
-        echo -e "${gl_hong}警告: 这将删除 Xray 程序、配置及日志！${gl_bai}"
-        read -p "确认卸载? (y/n): " confirm
-        if [[ "$confirm" == "y" ]]; then
-            echo -e "${gl_huang}调用官方脚本卸载...${gl_bai}"
-            bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
-            rm -rf $CONF_DIR
-            echo -e "${gl_lv}已卸载。${gl_bai}"
-        fi
-        read -p "按回车继续..."
+        echo -e "${gl_huang}调用官方脚本卸载...${gl_bai}"
+        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
+        rm -rf $CONF_DIR
+        echo "已卸载"; read -p "..."
     }
 
     while true; do
@@ -468,7 +468,7 @@ ${gl_lv}$link${gl_bai}
         echo -e "${gl_kjlan}################################################"
         echo -e "#         Xray 核心管理 (Official Standard)    #"
         echo -e "################################################${gl_bai}"
-        if systemctl is-active --quiet xray; then v=$($BIN_PATH version 2>/dev/null | head -n 1 | awk '{print $2}'); echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: ${ver:-未知})"; else echo -e "状态: ${gl_hong}● 已停止${gl_bai}"; fi
+        if systemctl is-active --quiet xray; then v=$($BIN_PATH version 2>/dev/null | head -n 1 | awk '{print $2}'); echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: ${v:-未知})"; else echo -e "状态: ${gl_hong}● 已停止${gl_bai}"; fi
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 安装/更新 (Install Latest)"
         echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Reset Config)"
@@ -479,7 +479,7 @@ ${gl_lv}$link${gl_bai}
         echo -e " 6. 停止服务 (Stop)"
         echo -e "------------------------------------------------"
         echo -e "${gl_hong} 9.${gl_bai} 彻底卸载 (Uninstall)"
-        echo -e "${gl_hui} 0.${gl_bai} 返回主菜单"
+        echo -e "${gl_hui} 0.${gl_bai} 返回上级菜单"
         echo -e "------------------------------------------------"
         read -p "选项: " c
         case "$c" in
@@ -487,8 +487,8 @@ ${gl_lv}$link${gl_bai}
             2) configure_reality ;;
             3) view_config ;;
             4) echo -e "${gl_huang}回车退出监控...${gl_bai}"; journalctl -u xray -n 50 -f & pid=$!; read -r; kill $pid; wait $pid 2>/dev/null ;;
-            5) systemctl restart xray; echo -e "${gl_lv}已重启${gl_bai}"; sleep 1 ;;
-            6) systemctl stop xray; echo -e "${gl_hong}已停止${gl_bai}"; sleep 1 ;;
+            5) systemctl restart xray; echo "已重启"; sleep 1 ;;
+            6) systemctl stop xray; echo "已停止"; sleep 1 ;;
             9) uninstall_xray ;;
             0) return ;;
             *) echo "无效选项" ;;
@@ -496,9 +496,8 @@ ${gl_lv}$link${gl_bai}
     done
 }
 
-# ===== 模块 8B: Sing-box 核心管理 =====
+# ===== 模块 8B: Sing-box 管理 =====
 singbox_management() {
-    
     BIN_PATH="/usr/bin/sing-box"
     CONF_DIR="/etc/sing-box"
     INFO_FILE="${CONF_DIR}/info.txt"
@@ -522,31 +521,30 @@ singbox_management() {
     }
 
     install_sb() {
-        echo -e "${gl_huang}正在检查架构...${gl_bai}"
+        echo -e "${gl_huang}检查架构...${gl_bai}"
         local arch=$(uname -m); local sb_arch=""
         case "$arch" in x86_64) sb_arch="amd64";; aarch64) sb_arch="arm64";; *) echo "不支持"; return;; esac
 
         local version=$(get_ver)
         echo -e "最新版本: ${gl_lv}${version}${gl_bai}"
-        
         local ver_num=${version#v} 
-        local download_url="https://github.com/SagerNet/sing-box/releases/download/${version}/sing-box_${ver_num}_linux_${sb_arch}.deb"
+        local url="https://github.com/SagerNet/sing-box/releases/download/${version}/sing-box_${ver_num}_linux_${sb_arch}.deb"
 
-        echo -e "${gl_kjlan}正在下载 .deb...${gl_bai}"
-        if curl -L -o /tmp/sing-box.deb "$download_url"; then
+        echo -e "${gl_kjlan}下载 .deb...${gl_bai}"
+        if curl -L -o /tmp/sb.deb "$url"; then
             echo -e "${gl_huang}安装/升级...${gl_bai}"
             if command -v sing-box &>/dev/null; then
                 # 安全升级
-                ar x /tmp/sing-box.deb data.tar.xz --output /tmp/
+                ar x /tmp/sb.deb data.tar.xz --output /tmp/
                 tar -xf /tmp/data.tar.xz -C /tmp/ ./usr/bin/sing-box
                 systemctl stop sing-box
                 cp -f /tmp/usr/bin/sing-box /usr/bin/sing-box; chmod +x /usr/bin/sing-box
                 systemctl restart sing-box
-                rm -f /tmp/sing-box.deb /tmp/data.tar.xz /tmp/usr/bin/sing-box; rm -rf /tmp/usr
+                rm -f /tmp/sb.deb /tmp/data.tar.xz /tmp/usr/bin/sing-box; rm -rf /tmp/usr
                 echo -e "${gl_lv}升级完成${gl_bai}"
             else
                 # 首次安装
-                apt install /tmp/sing-box.deb -y; rm -f /tmp/sing-box.deb
+                apt install /tmp/sb.deb -y; rm -f /tmp/sb.deb
                 systemctl daemon-reload; systemctl enable sing-box; systemctl restart sing-box 2>/dev/null
                 echo -e "${gl_lv}安装完成${gl_bai}"
             fi
@@ -672,7 +670,7 @@ proxy_menu() {
         echo -e "------------------------------------------------"
         echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
         echo -e "------------------------------------------------"
-        read -p "请输入选项: " c
+        read -p "选项: " c
         case "$c" in
             1) xray_management ;;
             2) singbox_management ;;
@@ -681,25 +679,84 @@ proxy_menu() {
     done
 }
 
-# ===== 模块: 系统辅助 (完整版) =====
+# ===== 模块: 系统辅助 (完整版 v1.6) =====
 linux_info() {
     clear
-    echo -e "${gl_huang}采集信息中...${gl_bai}"
+    echo -e "${gl_huang}正在采集系统信息...${gl_bai}"
     ip_address
+
+    local cpu_info=$(lscpu | awk -F': +' '/Model name:/ {print $2; exit}')
+    local cpu_usage_percent=$(awk '{u=$2+$4; t=$2+$4+$5; if (NR==1){u1=u; t1=t;} else printf "%.0f\n", (($2+$4-u1) * 100 / (t-t1))}' \
+        <(grep 'cpu ' /proc/stat) <(sleep 1; grep 'cpu ' /proc/stat))
+    local cpu_cores=$(nproc)
+    local cpu_freq=$(cat /proc/cpuinfo | grep "MHz" | head -n 1 | awk '{printf "%.1f GHz\n", $4/1000}')
+    local mem_info=$(free -b | awk 'NR==2{printf "%.2f/%.2fM (%.2f%%)", $3/1024/1024, $2/1024/1024, $3*100/$2}')
+    local disk_info=$(df -h | awk '$NF=="/"{printf "%s/%s (%s)", $3, $2, $5}')
+    
+    # 仅保留纯粹的信息获取
+    local ipinfo=$(curl -s ipinfo.io)
+    local country=$(echo "$ipinfo" | grep 'country' | awk -F': ' '{print $2}' | tr -d '",')
+    local city=$(echo "$ipinfo" | grep 'city' | awk -F': ' '{print $2}' | tr -d '",')
+    local isp_info=$(echo "$ipinfo" | grep 'org' | awk -F': ' '{print $2}' | tr -d '",')
+    
+    local load=$(uptime | awk '{print $(NF-2), $(NF-1), $NF}')
+    local dns_addresses=$(awk '/^nameserver/{printf "%s ", $2} END {print ""}' /etc/resolv.conf)
+    local cpu_arch=$(uname -m)
+    local hostname=$(uname -n)
+    local kernel_version=$(uname -r)
+    local congestion_algorithm=$(sysctl -n net.ipv4.tcp_congestion_control)
+    local queue_algorithm=$(sysctl -n net.core.default_qdisc)
+    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
+    
+    # 调用统计
     output_status
-    local cpu=$(lscpu | grep 'Model name' | cut -f2 -d: | sed 's/^[ \t]*//')
-    local mem=$(free -m | awk 'NR==2{printf "%d/%dMB (%.2f%%)", $3, $2, $3*100/$2}')
-    local disk=$(df -h / | awk 'NR==2{print $3 "/" $2 " (" $5 ")"}')
-    echo -e "${gl_lv}系统信息${gl_bai}"
-    echo "------------------------------------------------"
-    echo -e "主机: $(hostname) ($country_code $flag)"
-    echo -e "系统: $(cat /etc/issue | tr -d '\\n\\l')"
-    echo -e "CPU:  $cpu ($(nproc)核)"
-    echo -e "内存: $mem"
-    echo -e "硬盘: $disk"
-    echo -e "流量: $rx / $tx"
-    echo -e "时间: $(date) ($(current_timezone))"
-    read -p "按回车返回..."
+    
+    local current_time=$(date "+%Y-%m-%d %I:%M %p")
+    local swap_info=$(free -m | awk 'NR==3{used=$3; total=$2; if (total == 0) {percentage=0} else {percentage=used*100/total}; printf "%dM/%dM (%d%%)", used, total, percentage}')
+    local runtime=$(cat /proc/uptime | awk -F. '{run_days=int($1 / 86400);run_hours=int(($1 % 86400) / 3600);run_minutes=int(($1 % 3600) / 60); if (run_days > 0) printf("%d天 ", run_days); if (run_hours > 0) printf("%d时 ", run_hours); printf("%d分\n", run_minutes)}')
+    local timezone=$(current_timezone)
+    local tcp_count=$(ss -t | wc -l)
+    local udp_count=$(ss -u | wc -l)
+
+    echo ""
+    echo -e "${gl_lv}系统信息概览${gl_bai}"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($country_code $flag)"
+    echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
+    echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}CPU架构:        ${gl_bai}$cpu_arch"
+    echo -e "${gl_kjlan}CPU型号:        ${gl_bai}$cpu_info"
+    echo -e "${gl_kjlan}CPU核心数:      ${gl_bai}$cpu_cores"
+    echo -e "${gl_kjlan}CPU频率:        ${gl_bai}$cpu_freq"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}CPU占用:        ${gl_bai}$cpu_usage_percent%"
+    echo -e "${gl_kjlan}系统负载:       ${gl_bai}$load"
+    echo -e "${gl_kjlan}TCP|UDP连接数:  ${gl_bai}$tcp_count|$udp_count"
+    echo -e "${gl_kjlan}物理内存:       ${gl_bai}$mem_info"
+    echo -e "${gl_kjlan}虚拟内存:       ${gl_bai}$swap_info"
+    echo -e "${gl_kjlan}硬盘占用:       ${gl_bai}$disk_info"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}总接收:         ${gl_bai}$rx"
+    echo -e "${gl_kjlan}总发送:         ${gl_bai}$tx"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}网络算法:       ${gl_bai}$congestion_algorithm $queue_algorithm"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}运营商:         ${gl_bai}$isp_info"
+    if [ -n "$ipv4_address" ]; then
+        echo -e "${gl_kjlan}IPv4地址:       ${gl_bai}$ipv4_address"
+    fi
+    if [ -n "$ipv6_address" ]; then
+        echo -e "${gl_kjlan}IPv6地址:       ${gl_bai}$ipv6_address"
+    fi
+    echo -e "${gl_kjlan}DNS地址:        ${gl_bai}$dns_addresses"
+    echo -e "${gl_kjlan}地理位置:       ${gl_bai}$country $city"
+    echo -e "${gl_kjlan}系统时间:       ${gl_bai}$timezone $current_time"
+    echo -e "${gl_kjlan}-------------"
+    echo -e "${gl_kjlan}运行时长:       ${gl_bai}$runtime"
+    echo
+    echo "按回车返回..."
+    read -r
 }
 
 linux_update() {
