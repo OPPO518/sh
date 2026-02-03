@@ -66,7 +66,7 @@ current_timezone() {
     if grep -q 'Alpine' /etc/issue; then date +"%Z %z"; else timedatectl | grep "Time zone" | awk '{print $3}'; fi
 }
 
-# ===== 模块 1: 系统初始化 (v1.6 逻辑) =====
+# ===== 模块 1: 系统初始化 (v1.6 逻辑 + 反馈报告回归) =====
 system_initialize() {
     clear
     echo -e "${gl_kjlan}################################################"
@@ -86,7 +86,13 @@ system_initialize() {
     echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
     echo -e "------------------------------------------------"
     read -p "请输入选项 [0-2]: " role_choice
-    if [ "$role_choice" == "0" ]; then return; fi
+    
+    # 有效性校验
+    case "$role_choice" in
+        1|2) ;;
+        0) return ;;
+        *) echo -e "${gl_hong}无效选项，操作已取消！${gl_bai}"; sleep 1; return ;;
+    esac
 
     echo -e "${gl_kjlan}>>> 正在执行初始化...${gl_bai}"
     
@@ -132,7 +138,29 @@ EOF
     timedatectl set-timezone Asia/Shanghai
     systemctl enable --now systemd-timesyncd
     
+    # [v1.6 经典反馈报告回归]
+    echo -e ""
+    echo -e "${gl_lv}====== 初始化配置报告 (Init Report) ======${gl_bai}"
+    
+    # 检查 BBR
+    local bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control)
+    echo -e " 1. BBR 算法: \t${gl_kjlan}${bbr_status}${gl_bai}"
+    
+    # 检查 转发状态
+    local fw_status=$(sysctl -n net.ipv4.ip_forward)
+    if [ "$fw_status" == "1" ]; then
+        echo -e " 2. 内核转发: \t${gl_huang}已开启 (中转模式)${gl_bai}"
+    else
+        echo -e " 2. 内核转发: \t${gl_lv}已关闭 (落地模式)${gl_bai}"
+    fi
+
+    # 检查 时间
+    local current_time=$(date "+%Y-%m-%d %H:%M:%S")
+    echo -e " 3. 当前时间: \t${gl_bai}${current_time} (CST)${gl_bai}"
+
+    echo -e "------------------------------------------------"
     echo -e "${gl_lv}初始化完成！${gl_bai}"
+    
     if [ -f /var/run/reboot-required ]; then
         echo -e "${gl_hong}!!! 检测到内核更新，必须重启 !!!${gl_bai}"
         read -p "是否立即重启? (y/n): " rb
@@ -156,7 +184,7 @@ swap_management() {
              echo -e "当前状态: ${gl_lv}已启用${gl_bai} | 总计: ${gl_kjlan}${swap_total}MB${gl_bai}"
         fi
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 添加/扩容 Swap"
+        echo -e "${gl_lv} 1.${gl_bai} 设置/扩容 Swap"
         echo -e "${gl_hong} 2.${gl_bai} 卸载/关闭 Swap"
         echo -e "${gl_hui} 0. 返回上级菜单${gl_bai}"
         echo -e "------------------------------------------------"
@@ -415,8 +443,7 @@ EOF
             7) 
                 if [ "$mode" == "transit" ]; then
                     read -p "请输入删除的本机端口: " lp
-                    nft delete element inet my_transit fwd_tcp { $lp } 2>/dev/null
-                    nft delete element inet my_transit fwd_udp { $lp } 2>/dev/null
+                    nft delete element inet my_transit fwd_tcp { $lp } && nft delete element inet my_transit fwd_udp { $lp } && nft list ruleset > /etc/nftables.conf && echo "OK"; sleep 1
                     nft list ruleset > /etc/nftables.conf
                     echo -e "${gl_hong}规则已移除。${gl_bai}"
                 fi
@@ -601,41 +628,19 @@ xray_management() {
     }
 
     install_xray() {
-        echo -e "${gl_huang}正在下载 Xray-core (直连 GitHub v1.8.24)...${gl_bai}"
-        systemctl stop xray 2>/dev/null
-        rm -f /usr/local/bin/xray $INFO_FILE
-        rm -rf /usr/local/share/xray
-        mkdir -p /usr/local/share/xray
-        apt update && apt install unzip curl -y
-        
-        local arch=$(uname -m)
-        local url=""
-        if [[ "$arch" == "x86_64" ]]; then url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip"
-        elif [[ "$arch" == "aarch64" ]]; then url="https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-arm64-v8a.zip"
-        else echo -e "${gl_hong}不支持架构: $arch${gl_bai}"; return; fi
-        
-        curl -L -o /tmp/xray.zip "$url"
-        if [ ! -s "/tmp/xray.zip" ]; then echo -e "${gl_hong}下载失败!${gl_bai}"; return; fi
-        
-        unzip -o /tmp/xray.zip -d /tmp/xray_dist
-        mv -f /tmp/xray_dist/xray /usr/local/bin/xray; chmod +x /usr/local/bin/xray
-        mv -f /tmp/xray_dist/geoip.dat /usr/local/share/xray/
-        mv -f /tmp/xray_dist/geosite.dat /usr/local/share/xray/
-        
-        cat > /etc/systemd/system/xray.service << EOF
-[Unit]
-Description=Xray Service
-After=network.target
-[Service]
-ExecStart=/usr/local/bin/xray run -c /usr/local/etc/xray/config.json
-Restart=on-failure
-[Install]
-WantedBy=multi-user.target
-EOF
-        mkdir -p $CONF_DIR
-        rm -rf /tmp/xray.zip /tmp/xray_dist
-        systemctl daemon-reload; systemctl enable xray
-        echo -e "${gl_lv}安装成功!${gl_bai}"; read -p "按回车继续..."
+        echo -e "${gl_huang}正在调用官方脚本安装 (User=root)...${gl_bai}"
+        bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u root
+        if [ $? -eq 0 ]; then
+            echo -e "${gl_lv}安装/升级成功！${gl_bai}"
+            $BIN_PATH version | head -n 1
+            echo -e "------------------------------------------------"
+            echo -e "请继续执行 [2. 初始化配置] 以启用服务。"
+            echo -e "------------------------------------------------"
+        else
+            echo -e "${gl_hong}安装失败！${gl_bai}"
+            echo -e "可能是网络连接 GitHub 失败，请检查 VPS 网络。"
+        fi
+        read -p "按回车继续..."
     }
 
     configure_reality() {
@@ -715,12 +720,12 @@ ${gl_lv}$link${gl_bai}
         echo -e "${gl_hong}警告: 这将删除 Xray 程序、配置及日志！${gl_bai}"
         read -p "确认卸载? (y/n): " confirm
         if [[ "$confirm" == "y" ]]; then
-            echo -e "${gl_huang}正在卸载...${gl_bai}"
-            systemctl stop xray; systemctl disable xray
-            rm -f /usr/local/bin/xray /etc/systemd/system/xray.service $INFO_FILE
-            rm -rf /usr/local/etc/xray /usr/local/share/xray
-            systemctl daemon-reload
-            echo -e "${gl_lv}Xray 已卸载。${gl_bai}"
+            echo -e "${gl_huang}正在调用官方脚本卸载...${gl_bai}"
+            bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
+            rm -rf $CONF_DIR
+            echo -e "${gl_lv}Xray 已彻底卸载。${gl_bai}"
+        else
+            echo "已取消"
         fi
         read -p "按回车继续..."
     }
@@ -730,9 +735,16 @@ ${gl_lv}$link${gl_bai}
         echo -e "${gl_kjlan}################################################"
         echo -e "#         Xray 核心管理 (Official Standard)    #"
         echo -e "################################################${gl_bai}"
-        if systemctl is-active --quiet xray; then v=$($BIN_PATH version 2>/dev/null | head -n 1 | awk '{print $2}'); echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: ${v:-未知})"; else echo -e "状态: ${gl_hong}● 已停止${gl_bai}"; fi
+        
+        if systemctl is-active --quiet xray; then
+            local ver=$($BIN_PATH version 2>/dev/null | head -n 1 | awk '{print $2}')
+            echo -e "状态: ${gl_lv}● 运行中${gl_bai} (Ver: ${ver:-未知})"
+        else
+            echo -e "状态: ${gl_hong}● 已停止${gl_bai}"
+        fi
+        
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 手动下载安装 (Install)"
+        echo -e "${gl_lv} 1.${gl_bai} 安装/升级 (Official Install)"
         echo -e "${gl_lv} 2.${gl_bai} 初始化配置 (Reset Config)"
         echo -e "${gl_huang} 3.${gl_bai} 查看当前配置 (View Info)"
         echo -e "------------------------------------------------"
@@ -743,7 +755,7 @@ ${gl_lv}$link${gl_bai}
         echo -e "${gl_hong} 9.${gl_bai} 彻底卸载 (Uninstall)"
         echo -e "${gl_hui} 0.${gl_bai} 返回上级菜单"
         echo -e "------------------------------------------------"
-        read -p "选项: " c
+        read -p "请输入选项: " c
         case "$c" in
             1) install_xray ;;
             2) configure_reality ;;
@@ -983,7 +995,7 @@ linux_info() {
     echo ""
     echo -e "${gl_lv}系统信息概览${gl_bai}"
     echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname"
+    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($country_code $flag)"
     echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
     echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
     echo -e "${gl_kjlan}-------------"
