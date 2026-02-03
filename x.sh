@@ -990,19 +990,20 @@ EOF
         local flag=$(get_flag_local "$code")
         local link="vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
 
-        cat > $INFO_FILE << EOF
-------------------------------------------------
+        # 4. 写入收据文件 (info.txt) - 核心修正: 使用 echo -e 强制转义颜色
+        echo -e "------------------------------------------------
 ${gl_kjlan}Xray Reality 配置信息${gl_bai}
+------------------------------------------------
 地址: ${gl_bai}$ip${gl_bai}
 地区: ${gl_bai}$code $flag${gl_bai}
 端口: ${gl_bai}52368${gl_bai}
 UUID: ${gl_bai}$uuid${gl_bai}
 公钥: ${gl_bai}$pub${gl_bai}
-SID:  ${gl_bai}$sid${gl_bai}
+SID : ${gl_bai}$sid${gl_bai}
 ------------------------------------------------
-链接: ${gl_lv}$link${gl_bai}
-------------------------------------------------
-EOF
+${gl_kjlan}快速导入链接:${gl_bai}
+${gl_lv}$link${gl_bai}
+------------------------------------------------" > $INFO_FILE
         
         systemctl restart xray
         # 直接调用查看功能
