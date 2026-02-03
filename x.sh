@@ -942,10 +942,14 @@ xray_management() {
     # --- 动作: 初始化配置 (生成即保存，拒绝分析) ---
     configure_reality() {
         if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
-        ensure_port_open
+        
+        # 1. 先生成随机端口 (20000-65000)
+        local port=$(shuf -i 20000-65000 -n 1)
+
+        # 2. 再把这个端口传给防火墙函数
+        ensure_port_open "$port"
+
         echo -e "${gl_huang}正在生成配置...${gl_bai}"
-        # 生成 50000 到 65000 之间的随机端口
-        local port=$(shuf -i 50000-65000 -n 1)
         
         # 1. 生成变量 (内存中绝对正确)
         local uuid=$($BIN_PATH uuid)
@@ -968,7 +972,7 @@ xray_management() {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "port": 52368, "protocol": "vless",
+      "port": $port, "protocol": "vless",
       "settings": { "clients": [ { "id": "$uuid", "flow": "xtls-rprx-vision" } ], "decryption": "none" },
       "streamSettings": {
         "network": "tcp", "security": "reality",
@@ -990,7 +994,7 @@ EOF
         local ip=$(curl -s --max-time 3 https://ipinfo.io/ip)
         local code=$(curl -s --max-time 3 https://ipinfo.io/country | tr -d '\n')
         local flag=$(get_flag_local "$code")
-        local link="vless://$uuid@$ip:52368?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
+        local link="vless://$uuid@$ip:$port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=$pub&sid=$sid&type=tcp&headerType=none#${flag}Xray-Reality"
 
         # 4. 写入收据文件 (info.txt) - 核心修正: 使用 echo -e 强制转义颜色
         echo -e "------------------------------------------------
@@ -998,7 +1002,7 @@ ${gl_kjlan}Xray Reality 配置信息${gl_bai}
 ------------------------------------------------
 地址: ${gl_bai}$ip${gl_bai}
 地区: ${gl_bai}$code $flag${gl_bai}
-端口: ${gl_bai}52368${gl_bai}
+端口: ${gl_bai}$port${gl_bai}
 UUID: ${gl_bai}$uuid${gl_bai}
 公钥: ${gl_bai}$pub${gl_bai}
 SID : ${gl_bai}$sid${gl_bai}
