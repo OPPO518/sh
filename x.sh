@@ -910,10 +910,10 @@ xray_management() {
         if command -v nft &>/dev/null; then
             if nft list tables | grep -q "my_landing"; then t="my_landing"; s="allowed_tcp"; su="allowed_udp";
             elif nft list tables | grep -q "my_transit"; then t="my_transit"; s="local_tcp"; su="local_udp"; else return; fi
-            if ! nft list set inet $t $s 2>/dev/null | grep -q "52368"; then
-                echo -e "${gl_huang}防火墙放行端口 52368...${gl_bai}"
-                nft add element inet $t $s { 52368 }
-                nft add element inet $t $su { 52368 }
+            if ! nft list set inet $t $s 2>/dev/null | grep -q "$1"; then
+                echo -e "${gl_huang}防火墙放行端口 "$1"...${gl_bai}"
+                nft add element inet $t $s { $1 }
+                nft add element inet $t $su { $1 }
                 nft list ruleset > /etc/nftables.conf
             fi
         fi
@@ -944,6 +944,8 @@ xray_management() {
         if [ ! -f "$BIN_PATH" ]; then echo -e "${gl_hong}请先安装 Xray!${gl_bai}"; sleep 1; return; fi
         ensure_port_open
         echo -e "${gl_huang}正在生成配置...${gl_bai}"
+        # 生成 50000 到 65000 之间的随机端口
+        local port=$(shuf -i 50000-65000 -n 1)
         
         # 1. 生成变量 (内存中绝对正确)
         local uuid=$($BIN_PATH uuid)
