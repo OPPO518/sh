@@ -460,6 +460,7 @@ EOF
                 echo -e "${gl_kjlan} 4.${gl_bai} 添加转发规则 (Add Forward)"
                 echo -e "${gl_kjlan} 5.${gl_bai} 删除转发规则 (Del Forward)"
             fi
+            echo -e "------------------------------------------------"
             echo -e "${gl_hong} 8.${gl_bai} 重置/切换模式 (Re-Init)"
         fi
         echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
