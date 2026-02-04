@@ -447,10 +447,12 @@ EOF
         else
             # 已初始化时的菜单 (序号从 1 开始)
             echo -e "${gl_lv} 1.${gl_bai} 查看所有规则 (List Rules)"
+            echo -e "------------------------------------------------"
             echo -e "${gl_lv} 2.${gl_bai} 添加放行端口 (Allow Port)"
             echo -e "${gl_lv} 3.${gl_bai} 删除放行端口 (Delete Port)"
             
             if [ "$mode" == "Transit" ]; then
+                echo -e "------------------------------------------------"
                 echo -e "${gl_kjlan} 4.${gl_bai} 添加转发规则 (Add Forward)"
                 echo -e "${gl_kjlan} 5.${gl_bai} 删除转发规则 (Del Forward)"
             fi
