@@ -849,7 +849,25 @@ ${gl_lv}$link${gl_bai}
             1) install_xray ;;
             2) configure_reality ;;
             3) view_config ;;
-            4) echo -e "${gl_huang}回车退出监控...${gl_bai}"; journalctl -u xray -n 50 -f & pid=$!; read -r; kill $pid; wait $pid 2>/dev/null ;;
+            4) 
+                echo -e "${gl_huang}正在实时监控 Xray 日志 (显示最后 50 行)...${gl_bai}"
+                echo -e "${gl_lv}>>> 请按【回车键】停止查看并返回菜单 <<<${gl_bai}"
+                echo -e "------------------------------------------------"
+                
+                # 1. 后台运行日志追踪 (-f)
+                journalctl -u xray -n 50 -f &
+                local log_pid=$!
+                
+                # 2. 脚本暂停，单纯等待用户按回车
+                read -r
+                
+                # 3. 用户按回车后，杀掉日志进程
+                kill $log_pid >/dev/null 2>&1
+                wait $log_pid 2>/dev/null
+                
+                echo -e "${gl_lv}已停止监控。${gl_bai}"
+                sleep 1
+                ;;
             5) systemctl restart xray; echo -e "${gl_lv}服务已重启${gl_bai}"; sleep 1 ;;
             6) systemctl stop xray; echo -e "${gl_hong}服务已停止${gl_bai}"; sleep 1 ;;
             9) uninstall_xray ;;
