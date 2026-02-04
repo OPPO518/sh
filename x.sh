@@ -468,7 +468,7 @@ EOF
                     list_rules_ui
                     echo -e "${gl_hui}提示: 支持单端口(8080) 或 范围(50000:60000)${gl_bai}"
                     read -p "请输入要放行的端口: " p_port
-                    if [[ "$p_port" =~ ^[0-9:-]+$ ]]; then
+                    if [[ "$p_port" =~ ^[-0-9:]+$ ]]; then
                         p_port=$(echo "$p_port" | tr ':' '-')
                         nft add element inet $table $set_tcp { $p_port }
                         nft add element inet $table $set_udp { $p_port }
@@ -482,7 +482,7 @@ EOF
                 3)
                     list_rules_ui
                     read -p "请输入要删除的端口: " p_port
-                    if [[ "$p_port" =~ ^[0-9:-]+$ ]]; then
+                    if [[ "$p_port" =~ ^[-0-9:]+$ ]]; then
                         p_port=$(echo "$p_port" | tr ':' '-')
                         nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
                         nft delete element inet $table $set_udp { $p_port } 2>/dev/null
