@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-#  Debian VPS 运维工具箱 (v2.12 Full Restore Edition)
+#  Debian VPS 运维工具箱 (v2.0 Full Restore Edition)
 #  集成: Init, Swap, Nftables, Fail2ban, Xray, Sing-box
 # =========================================================
 
@@ -451,10 +451,12 @@ EOF
             echo -e "${gl_lv} 1.${gl_bai} 初始化为：落地机防火墙 (仅放行)"
             echo -e "${gl_lv} 2.${gl_bai} 初始化为：中转机防火墙 (含转发面板)"
         else
-            echo -e "${gl_lv} 1.${gl_bai} 查看规则 (List Rules)"
+            echo -e "${gl_lv} 1.${gl_bai} 查看所有规则 (List Rules)"
+            echo -e "------------------------------------------------"
             echo -e "${gl_lv} 2.${gl_bai} 添加放行端口 (Allow Port)"
             echo -e "${gl_lv} 3.${gl_bai} 删除放行端口 (Delete Port)"
             if [ "$mode" == "Transit" ]; then
+                echo -e "------------------------------------------------"
                 echo -e "${gl_kjlan} 4.${gl_bai} 添加转发规则 (Add Forward)"
                 echo -e "${gl_kjlan} 5.${gl_bai} 删除转发规则 (Del Forward)"
             fi
@@ -1195,18 +1197,18 @@ main_menu() {
         echo -e "#           Debian VPS 极简运维工具箱          #"
         echo -e "#                                              #"
         echo -e "################################################${gl_bai}"
-        echo -e "${gl_huang}当前版本: 2.1 (Final Restore)${gl_bai}"
+        echo -e "${gl_huang}当前版本: 2.0(Final Restore)${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init) ${gl_hong}[新机必点]${gl_bai}"
+        echo -e "${gl_lv} 1.${gl_bai} 系统初始化 (System Init)"
         echo -e "${gl_lv} 2.${gl_bai} 虚拟内存管理 (Swap Manager)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 3.${gl_bai} 防火墙/中转管理 (Nftables) ${gl_hong}[核心]${gl_bai}"
         echo -e "${gl_kjlan} 4.${gl_bai} 防暴力破解管理 (Fail2ban) ${gl_hong}[安全]${gl_bai}"
-        echo -e "${gl_kjlan} 8.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
+        echo -e "${gl_kjlan} 5.${gl_bai} 核心代理服务 (Xray/Sing-box) ${gl_hong}[Reality]${gl_bai}"
         echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 5.${gl_bai} 系统信息查询 (System Info)"
-        echo -e "${gl_lv} 6.${gl_bai} 系统更新 (Update Only)"
-        echo -e "${gl_lv} 7.${gl_bai} 系统清理 (Clean Junk)"
+        echo -e "${gl_lv} 6.${gl_bai} 系统信息查询 (System Info)"
+        echo -e "${gl_lv} 7.${gl_bai} 系统更新 (Update Only)"
+        echo -e "${gl_lv} 8.${gl_bai} 系统清理 (Clean Junk)"
         echo -e "------------------------------------------------"
         echo -e "${gl_kjlan} 9.${gl_bai} 更新脚本 (Update Script)"
         echo -e "${gl_hong} 0.${gl_bai} 退出 (Exit)"
@@ -1219,10 +1221,10 @@ main_menu() {
             2) swap_management ;;
             3) nftables_management ;;
             4) fail2ban_management ;;
-            8) proxy_menu ;;
-            5) linux_info ;;
-            6) linux_update ;;
-            7) linux_clean ;;
+            5) proxy_menu ;;
+            6) linux_info ;;
+            7) linux_update ;;
+            8) linux_clean ;;
             9) update_script ;;
             0) echo -e "${gl_lv}再见！${gl_bai}"; exit 0 ;;
             *) echo -e "${gl_hong}无效的选项！${gl_bai}"; sleep 1 ;;
