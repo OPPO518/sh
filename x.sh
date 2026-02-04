@@ -252,9 +252,14 @@ swap_management() {
     done
 }
 
-# ===== 模块 3: Nftables 防火墙 (Docker安全兼容 + 修复显示) =====
+# ===== 模块 3: Nftables 防火墙 (完全修复版: 独立函数 + 安全保存) =====
 nftables_management() {
-    detect_ssh() { ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1 || echo 22; }
+    # --- 1. 基础函数 ---
+    detect_ssh_port() {
+        local port=$(ss -tlnp | grep 'sshd' | awk '{print $4}' | awk -F: '{print $NF}' | head -n 1)
+        if [ -z "$port" ]; then port="22"; fi
+        echo "$port"
+    }
     
     # [核心安全] 保存函数：只重置我们自己的表，绝不误伤 Docker/Fail2ban
     save_config() {
@@ -272,25 +277,26 @@ nftables_management() {
         fi
     }
 
-    init_fw() {
-        local type=$1; local port=$(detect_ssh)
-        echo -e "${gl_huang}清理环境...${gl_bai}"
-        ufw disable 2>/dev/null; apt purge ufw -y 2>/dev/null
+    # --- 2. 落地机初始化 (独立函数) ---
+    init_landing_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 落地机(Landing) 策略...${gl_bai}"
         
-        if [ "$type" == "landing" ]; then
-            sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
-        else
-            sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-        fi
+        # 清理冲突
+        echo -e "清理环境..."
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        
+        # 强制关闭转发
+        sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
+        
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
 
-        apt update && apt install nftables -y; systemctl enable nftables
-        
-        # 初始化配置头
+        # 写入配置文件 (使用 delete table 替代 flush ruleset)
         echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
-        
-        if [ "$type" == "landing" ]; then
-            # 写入策略：Landing
-            cat >> /etc/nftables.conf << EOF
+        cat >> /etc/nftables.conf << EOF
 table inet my_landing {}
 delete table inet my_landing
 table inet my_landing {
@@ -298,16 +304,43 @@ table inet my_landing {
     set allowed_udp { type inet_service; flags interval; }
     chain input {
         type filter hook input priority 0; policy drop;
-        iif "lo" accept; ct state established,related accept; icmp type echo-request accept; icmpv6 type echo-request accept;
-        tcp dport $port accept; tcp dport @allowed_tcp accept; udp dport @allowed_udp accept;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        tcp dport $ssh_port accept
+        tcp dport @allowed_tcp accept
+        udp dport @allowed_udp accept
     }
     chain forward { type filter hook forward priority 0; policy drop; }
     chain output { type filter hook output priority 0; policy accept; }
 }
 EOF
-        else
-            # 写入策略：Transit
-            cat >> /etc/nftables.conf << EOF
+        nft -f /etc/nftables.conf
+        systemctl restart nftables
+        echo -e "${gl_lv}落地机防火墙部署完成！${gl_bai}"
+    }
+
+    # --- 3. 中转机初始化 (独立函数) ---
+    init_transit_firewall() {
+        local ssh_port=$(detect_ssh_port)
+        echo -e "${gl_huang}检测到 SSH 端口: ${ssh_port} (将强制放行)${gl_bai}"
+        echo -e "${gl_kjlan}正在部署 中转机(Transit) 策略...${gl_bai}"
+
+        echo -e "清理环境..."
+        ufw disable 2>/dev/null || true
+        apt purge ufw -y 2>/dev/null
+        apt update -y && apt install nftables -y
+        systemctl enable nftables
+
+        # 强制开启转发
+        modprobe nft_nat 2>/dev/null
+        modprobe br_netfilter 2>/dev/null
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+        
+        # 写入配置文件 (使用 delete table 替代 flush ruleset)
+        echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
+        cat >> /etc/nftables.conf << EOF
 table inet my_transit {}
 delete table inet my_transit
 table inet my_transit {
@@ -317,90 +350,135 @@ table inet my_transit {
     map fwd_udp { type inet_service : ipv4_addr . inet_service; }
     chain input {
         type filter hook input priority 0; policy drop;
-        iif "lo" accept; ct state established,related accept; icmp type echo-request accept; icmpv6 type echo-request accept;
-        tcp dport $port accept; tcp dport @local_tcp accept; udp dport @local_udp accept;
+        iif "lo" accept
+        ct state established,related accept
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+        tcp dport $ssh_port accept
+        tcp dport @local_tcp accept
+        udp dport @local_udp accept
     }
-    chain forward { type filter hook forward priority 0; policy accept; ct state established,related accept; tcp flags syn tcp option maxseg size set 1360; }
-    chain prerouting { type nat hook prerouting priority -100; policy accept; dnat ip to tcp dport map @fwd_tcp; dnat ip to udp dport map @fwd_udp; }
-    chain postrouting { type nat hook postrouting priority 100; policy accept; oifname != "lo" masquerade; }
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        ct state established,related accept
+        tcp flags syn tcp option maxseg size set 1360
+    }
+    chain prerouting {
+        type nat hook prerouting priority -100; policy accept;
+        dnat ip to tcp dport map @fwd_tcp
+        dnat ip to udp dport map @fwd_udp
+    }
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        oifname != "lo" masquerade
+    }
 }
 EOF
-        fi
-        
         nft -f /etc/nftables.conf
         systemctl restart nftables
-        echo -e "${gl_lv}防火墙已重置为: $type (Docker安全模式)${gl_bai}"; read -p "..."
+        echo -e "${gl_lv}中转机防火墙部署完成！${gl_bai}"
     }
 
+    # --- 4. 可视化列表 ---
     list_rules_ui() {
-        echo -e "${gl_huang}=== 防火墙状态 ===${gl_bai}"
-        echo -e "SSH Port: ${gl_lv}$(detect_ssh)${gl_bai}"
-        if nft list tables | grep -q "my_transit"; then t="my_transit"; st="local_tcp"; su="local_udp";
-        elif nft list tables | grep -q "my_landing"; then t="my_landing"; st="allowed_tcp"; su="allowed_udp";
-        else echo "未初始化"; return; fi
+        echo -e "${gl_huang}=== 防火墙规则概览 (Firewall Status) ===${gl_bai}"
+        echo -e "基础防自锁: ${gl_lv}SSH Port $(detect_ssh_port) [✔ Accepted]${gl_bai}"
         
+        local table_name=""
+        local set_tcp_name=""
+        local set_udp_name=""
+        
+        if nft list tables | grep -q "my_transit"; then 
+            table_name="my_transit"; set_tcp_name="local_tcp"; set_udp_name="local_udp"
+        elif nft list tables | grep -q "my_landing"; then
+            table_name="my_landing"; set_tcp_name="allowed_tcp"; set_udp_name="allowed_udp"
+        else 
+            echo -e "${gl_hong}防火墙未初始化${gl_bai}"; return
+        fi
+
         echo "------------------------------------------------"
-        local tcp=$(nft list set inet $t $st 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
-        local udp=$(nft list set inet $t $su 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
-        echo -e "放行 TCP: ${gl_kjlan}${tcp:-无}${gl_bai}"
-        echo -e "放行 UDP: ${gl_kjlan}${udp:-无}${gl_bai}"
+        echo -e "${gl_huang}=== 自定义端口放行 ===${gl_bai}"
+        local tcp_list=$(nft list set inet $table_name $set_tcp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
+        local udp_list=$(nft list set inet $table_name $set_udp_name 2>/dev/null | grep 'elements =' | awk -F '{' '{print $2}' | awk -F '}' '{print $1}' | tr -d ' ')
+
+        echo -e "[TCP] ${gl_kjlan}${tcp_list:-无}${gl_bai}"
+        echo -e "[UDP] ${gl_kjlan}${udp_list:-无}${gl_bai}"
+        echo "------------------------------------------------"
         
-        if [ "$t" == "my_transit" ]; then
-            echo "------------------------------------------------"
+        if [ "$table_name" == "my_transit" ]; then
             echo -e "${gl_kjlan}=== 端口转发规则 ===${gl_bai}"
             echo "--- TCP 转发 ---"
-            # [修正] 去掉了 grep -v 'type'，防止误删数据；增加 tr -d ';' 清理行尾分号
+            # 修复显示逻辑
             nft list map inet my_transit fwd_tcp 2>/dev/null | tr -d '{},=;' | awk '{for(i=1;i<=NF;i++) if($i==":") printf "TCP %-6s -> %s : %s\n", $(i-1), $(i+1), $(i+3)}'
-            
             echo "--- UDP 转发 ---"
             nft list map inet my_transit fwd_udp 2>/dev/null | tr -d '{},=;' | awk '{for(i=1;i<=NF;i++) if($i==":") printf "UDP %-6s -> %s : %s\n", $(i-1), $(i+1), $(i+3)}'
             echo "------------------------------------------------"
         fi
     }
 
+    # --- 5. 菜单主循环 ---
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
         echo -e "#          Nftables 防火墙与中转管理           #"
         echo -e "################################################${gl_bai}"
-        if nft list tables | grep -q "my_transit"; then mode="Transit"; table="my_transit"; set="local_tcp";
-        elif nft list tables | grep -q "my_landing"; then mode="Landing"; table="my_landing"; set="allowed_tcp";
-        else mode="None"; fi
         
-        echo -e "模式: ${gl_huang}$mode${gl_bai} | SSH端口: $(detect_ssh)"
-        echo -e "------------------------------------------------"
-        if [ "$mode" == "None" ]; then
-            echo -e "${gl_lv} 1.${gl_bai} 初始化为: 落地机 (Landing)"
-            echo -e "${gl_lv} 2.${gl_bai} 初始化为: 中转机 (Transit)"
+        local ssh_p=$(detect_ssh_port)
+        echo -e "当前 SSH 端口: ${gl_lv}${ssh_p}${gl_bai} (自动保护中)"
+        
+        local mode="None"
+        local table=""
+        local set_tcp=""
+        local set_udp=""
+        
+        if nft list tables | grep -q "my_transit"; then
+            echo -e "当前模式: ${gl_kjlan}中转机 (Transit NAT)${gl_bai}"
+            mode="Transit"
+            set_tcp="local_tcp"; set_udp="local_udp"
+            table="my_transit"
+        elif nft list tables | grep -q "my_landing"; then
+            echo -e "当前模式: ${gl_huang}落地机 (Landing FW)${gl_bai}"
+            mode="Landing"
+            set_tcp="allowed_tcp"; set_udp="allowed_udp"
+            table="my_landing"
         else
-            echo -e "${gl_lv} 1.${gl_bai} 查看所有规则 (List Rules)"
-            echo -e "------------------------------------------------"
+            echo -e "当前模式: ${gl_hong}未初始化 / 未知${gl_bai}"
+            mode="None"
+        fi
+        echo -e "------------------------------------------------"
+        
+        if [ "$mode" == "None" ]; then
+            echo -e "${gl_lv} 1.${gl_bai} 初始化为：落地机防火墙 (仅放行)"
+            echo -e "${gl_lv} 2.${gl_bai} 初始化为：中转机防火墙 (含转发面板)"
+        else
+            echo -e "${gl_lv} 1.${gl_bai} 查看规则 (List Rules)"
             echo -e "${gl_lv} 2.${gl_bai} 添加放行端口 (Allow Port)"
             echo -e "${gl_lv} 3.${gl_bai} 删除放行端口 (Delete Port)"
             if [ "$mode" == "Transit" ]; then
-                echo -e "------------------------------------------------"
                 echo -e "${gl_kjlan} 4.${gl_bai} 添加转发规则 (Add Forward)"
                 echo -e "${gl_kjlan} 5.${gl_bai} 删除转发规则 (Del Forward)"
             fi
             echo -e "${gl_hong} 8.${gl_bai} 重置/切换模式 (Re-Init)"
         fi
-        echo -e "${gl_hui} 0. 返回${gl_bai}"
+        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
         echo -e "------------------------------------------------"
-        read -p "选项: " c
-        case "$c" in
+        
+        read -p "请输入选项: " nf_choice
+
+        case "$nf_choice" in
             1) 
-                if [ "$mode" == "None" ]; then init_landing_firewall; read -p "..."
-                else list_rules_ui; read -p "..."; fi ;;
+                if [ "$mode" == "None" ]; then init_landing_firewall; read -p "按回车继续..."
+                else list_rules_ui; read -p "按回车继续..."; fi ;;
             2) 
-                if [ "$mode" == "None" ]; then init_transit_firewall; read -p "..."
+                if [ "$mode" == "None" ]; then init_transit_firewall; read -p "按回车继续..."
                 else 
                     list_rules_ui
                     echo -e "${gl_hui}提示: 支持单端口(8080) 或 范围(50000:60000)${gl_bai}"
                     read -p "请输入要放行的端口: " p_port
                     if [[ "$p_port" =~ ^([0-9]+|[0-9]+[-:][0-9]+)$ ]]; then
                         p_port=$(echo "$p_port" | tr ':' '-')
-                        nft add element inet $table $set { $p_port }
-                        nft add element inet $table ${set/tcp/udp} { $p_port }
+                        nft add element inet $table $set_tcp { $p_port }
+                        nft add element inet $table $set_udp { $p_port }
                         save_config # 安全保存
                         echo -e "${gl_lv}端口 $p_port 已放行。${gl_bai}"
                     else
@@ -414,8 +492,8 @@ EOF
                     read -p "请输入要删除的端口: " p_port
                     if [[ "$p_port" =~ ^([0-9]+|[0-9]+[-:][0-9]+)$ ]]; then
                         p_port=$(echo "$p_port" | tr ':' '-')
-                        nft delete element inet $table $set { $p_port } 2>/dev/null
-                        nft delete element inet $table ${set/tcp/udp} { $p_port } 2>/dev/null
+                        nft delete element inet $table $set_tcp { $p_port } 2>/dev/null
+                        nft delete element inet $table $set_udp { $p_port } 2>/dev/null
                         save_config # 安全保存
                         echo -e "${gl_hong}端口 $p_port 已移除。${gl_bai}"
                     fi
