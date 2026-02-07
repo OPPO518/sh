@@ -145,21 +145,7 @@ deb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-f
 # BBR
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
-# 基础优化
-net.ipv4.icmp_echo_ignore_all=0
-net.netfilter.nf_conntrack_max=1000000
-net.nf_conntrack_max=1000000
 EOF
-    
-    if [ "$role_choice" == "1" ]; then
-        echo "net.ipv4.ip_forward=0" >> /etc/sysctl.d/99-vps-optimize.conf
-        echo "net.ipv6.conf.all.forwarding=0" >> /etc/sysctl.d/99-vps-optimize.conf
-    else
-        modprobe nft_nat 2>/dev/null; modprobe br_netfilter 2>/dev/null
-        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-vps-optimize.conf
-        echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.d/99-vps-optimize.conf
-        echo "net.ipv4.conf.all.rp_filter=0" >> /etc/sysctl.d/99-vps-optimize.conf
-    fi
     sysctl --system
     
     # 时区设置
@@ -287,10 +273,7 @@ nftables_management() {
         echo -e "清理环境..."
         ufw disable 2>/dev/null || true
         apt purge ufw -y 2>/dev/null
-        
-        # 强制关闭转发
-        sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1
-        
+         
         apt update -y && apt install nftables -y
         systemctl enable nftables
 
@@ -332,11 +315,6 @@ EOF
         apt purge ufw -y 2>/dev/null
         apt update -y && apt install nftables -y
         systemctl enable nftables
-
-        # 强制开启转发
-        modprobe nft_nat 2>/dev/null
-        modprobe br_netfilter 2>/dev/null
-        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         
         # 写入配置文件 (使用 delete table 替代 flush ruleset)
         echo "#!/usr/sbin/nft -f" > /etc/nftables.conf
