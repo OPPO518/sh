@@ -38,12 +38,7 @@ install_xHTTP() {
     echo "下载最新 Xray 内核..."
     curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 
-    if [[ ! -f "xray.zip" ]]; then
-        echo "下载失败，未找到 xray.zip"
-        exit 1
-    fi
-
-    unzip xray.zip
+    unzip -o xray.zip
     mv xray /usr/local/bin/xHTTP
     chmod +x /usr/local/bin/xHTTP
 
@@ -77,19 +72,20 @@ filter_valid_ips() {
     IP_ADDRESSES=("${valid_ips[@]}")
 }
 
+############################################
+# 新版 Reality 密钥解析（PrivateKey / Password / Hash32）
+############################################
 generate_reality_keys() {
     echo "生成 Reality 密钥..."
     key_output=$(/usr/local/bin/xHTTP x25519 2>/dev/null)
 
     echo "$key_output"
 
-    PRIVATE_KEY=$(echo "$key_output" | grep -i 'Private key' | sed 's/.*Private key: *//I')
-    PUBLIC_KEY=$(echo "$key_output" | grep -i 'Public key'  | sed 's/.*Public key: *//I')
+    PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | sed 's/.*PrivateKey: *//I')
+    PUBLIC_KEY=$(echo "$key_output" | grep -i 'Password'   | sed 's/.*Password: *//I')
 
     if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
-        echo "解析 Reality 公钥/私钥失败，请手动执行："
-        echo "/usr/local/bin/xHTTP x25519"
-        echo "确认输出格式，再调整脚本解析逻辑。"
+        echo "Reality 密钥解析失败，请检查 xHTTP x25519 输出格式"
         exit 1
     fi
 
@@ -98,6 +94,7 @@ generate_reality_keys() {
 }
 
 interactive_params() {
+
     custom_dest=$(ask_yn "是否自定义伪装站点？默认: www.cloudflare.com")
     if [[ "$custom_dest" == "y" ]]; then
         while true; do
@@ -222,7 +219,6 @@ inboundTag = \"$tag\"
 outboundTag = \"$tag\"
 "
 
-        # IPv6 需要加中括号
         if [[ "$ip" == *:* ]]; then
             host="[$ip]"
         else
