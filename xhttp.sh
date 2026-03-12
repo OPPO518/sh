@@ -44,19 +44,8 @@ install_xHTTP() {
     echo "安装最新 Xray（重命名为 xHTTP）..."
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
 
-    echo "获取最新版本号..."
-    LATEST_TAG=$(curl -sL https://github.com/XTLS/Xray-core/releases/latest \
-        | grep -oP 'releases/tag/\K[^"]+')
-
-    if [[ -z "$LATEST_TAG" ]]; then
-        echo "无法获取最新版本号，请检查网络或 GitHub 访问情况."
-        exit 1
-    fi
-
-    LATEST_URL="https://github.com/XTLS/Xray-core/releases/download/$LATEST_TAG/Xray-linux-64.zip"
-
-    echo "下载: $LATEST_URL"
-    curl -L -o xray.zip "$LATEST_URL"
+    echo "下载最新 Xray 内核..."
+    curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 
     if [[ ! -f "xray.zip" ]]; then
         echo "下载失败，未找到 xray.zip"
