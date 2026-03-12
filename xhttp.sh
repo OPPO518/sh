@@ -64,7 +64,6 @@ EOF
 filter_valid_ips() {
     valid_ips=()
     for ip in "${IP_ADDRESSES[@]}"; do
-        # 过滤掉 127.x, 私有 IPv4 以及 IPv6 的 loopback 和 fe80 链路本地地址
         if [[ $ip =~ ^127\. ]] || [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || [[ $ip =~ ^192\.168\. ]] || [[ $ip =~ ^::1$ ]] || [[ $ip =~ ^fe80: ]]; then
             continue
         fi
@@ -80,9 +79,6 @@ generate_reality_keys() {
     echo "生成 Reality 密钥..."
     key_output=$(/usr/local/bin/xHTTP x25519 2>/dev/null)
 
-    echo "$key_output"
-
-    # 适配 xHTTP 内核输出格式：PrivateKey 和 Password
     PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | awk -F': ' '{print $2}' | tr -d ' ')
     PUBLIC_KEY=$(echo "$key_output" | grep -i 'Password' | awk -F': ' '{print $2}' | tr -d ' ')
 
@@ -90,13 +86,9 @@ generate_reality_keys() {
         echo "Reality 密钥解析失败，请检查 xHTTP x25519 输出格式"
         exit 1
     fi
-
-    echo "私钥: $PRIVATE_KEY"
-    echo "公钥: $PUBLIC_KEY"
 }
 
 interactive_params() {
-
     custom_dest=$(ask_yn "是否自定义伪装站点？默认: www.cloudflare.com")
     if [[ "$custom_dest" == "y" ]]; then
         while true; do
@@ -108,7 +100,6 @@ interactive_params() {
         REALITY_TARGET="www.cloudflare.com"
     fi
 
-    # 【修改点】：将 UUID 的获取逻辑移到这里（循环外），确保全局唯一
     custom_uuid=$(ask_yn "是否自定义 UUID？默认使用 xHTTP uuid 自动生成")
     if [[ "$custom_uuid" == "y" ]]; then
         while true; do
@@ -171,20 +162,24 @@ config_xHTTP() {
     filter_valid_ips
     interactive_params
 
-    # 提前声明根级别的 routing 配置
     config_content="[routing]
 domainStrategy = \"IPIfNonMatch\"
 
 "
     index=0
+    v2rayn_links=""
 
-    echo "" > /etc/xHTTP/clients.txt
+    # 提取第一个 IP 作为主入口 IP
+    MAIN_IP="${IP_ADDRESSES[0]}"
+    if [[ "$MAIN_IP" == *:* ]]; then
+        CONN_IP="[$MAIN_IP]"
+    else
+        CONN_IP="$MAIN_IP"
+    fi
 
     for ip in "${IP_ADDRESSES[@]}"; do
         port=$((START_PORT + index))
         tag="tag_$((index+1))"
-
-        # 【修改点】：直接使用在循环外生成的全局 UUID
         uuid="$GLOBAL_UUID"
 
         config_content+="[[inbounds]]
@@ -224,39 +219,44 @@ outboundTag = \"$tag\"
 
 "
 
-        if [[ "$ip" == *:* ]]; then
-            host="[$ip]"
-        else
-            host="$ip"
-        fi
-
         spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
-        v2rayn_link="vless://$uuid@$host:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-$ip"
-
-        {
-            echo "IP: $ip"
-            echo "端口: $port"
-            echo "UUID: $uuid"
-            echo "Reality 公钥: $PUBLIC_KEY"
-            echo "伪装站点: $REALITY_TARGET"
-            echo "ShortID: $SHORT_ID"
-            echo "XHTTP Path: $XHTTP_PATH"
-            echo "v2rayN 链接:"
-            echo "$v2rayn_link"
-            echo "--------------------------------"
-        } >> /etc/xHTTP/clients.txt
+        # 所有链接统一使用 CONN_IP 作为连接地址，仅通过端口和别名区分
+        v2rayn_link="vless://$uuid@$CONN_IP:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-$ip"
+        v2rayn_links+="$v2rayn_link\n"
 
         index=$((index+1))
     done
+
+    END_PORT=$((START_PORT + index - 1))
+
+    # 生成最终的整合日志
+    {
+        echo "IP: $MAIN_IP"
+        if [ "$START_PORT" -eq "$END_PORT" ]; then
+            echo "端口: $START_PORT"
+        else
+            echo "端口: $START_PORT-$END_PORT"
+        fi
+        echo "UUID: $GLOBAL_UUID"
+        echo "Reality 公钥: $PUBLIC_KEY"
+        echo "伪装站点: $REALITY_TARGET"
+        echo "ShortID: $SHORT_ID"
+        echo "XHTTP Path: $XHTTP_PATH"
+        echo "v2rayN 链接:"
+        echo -e "$v2rayn_links"
+    } > /etc/xHTTP/clients.txt
 
     echo -e "$config_content" >/etc/xHTTP/config.toml
     systemctl restart xHTTP.service
     systemctl --no-pager status xHTTP.service
 
     echo ""
-    echo "Reality + XHTTP 配置生成完成"
-    echo "客户端配置已写入: /etc/xHTTP/clients.txt"
-    echo "你可以使用 cat /etc/xHTTP/clients.txt 查看节点链接"
+    echo "================================================="
+    echo "        Reality + XHTTP 配置生成完成             "
+    echo "================================================="
+    cat /etc/xHTTP/clients.txt
+    echo "================================================="
+    echo "客户端配置已保存至: /etc/xHTTP/clients.txt"
     echo ""
 }
 
