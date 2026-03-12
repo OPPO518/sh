@@ -82,7 +82,7 @@ generate_reality_keys() {
 
     echo "$key_output"
 
-    # 适配你当前内核的输出格式：PrivateKey 和 Password
+    # 适配 xHTTP 内核输出格式：PrivateKey 和 Password
     PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | awk -F': ' '{print $2}' | tr -d ' ')
     PUBLIC_KEY=$(echo "$key_output" | grep -i 'Password' | awk -F': ' '{print $2}' | tr -d ' ')
 
@@ -108,15 +108,16 @@ interactive_params() {
         REALITY_TARGET="www.cloudflare.com"
     fi
 
+    # 【修改点】：将 UUID 的获取逻辑移到这里（循环外），确保全局唯一
     custom_uuid=$(ask_yn "是否自定义 UUID？默认使用 xHTTP uuid 自动生成")
     if [[ "$custom_uuid" == "y" ]]; then
         while true; do
-            read -p "请输入 UUID: " CUSTOM_UUID
-            [[ -n "$CUSTOM_UUID" ]] && break
+            read -p "请输入 UUID: " GLOBAL_UUID
+            [[ -n "$GLOBAL_UUID" ]] && break
             echo "UUID 不能为空."
         done
     else
-        CUSTOM_UUID=""
+        GLOBAL_UUID=$(/usr/local/bin/xHTTP uuid)
     fi
 
     custom_key=$(ask_yn "是否自定义 Reality 公钥/私钥？默认自动生成")
@@ -170,7 +171,7 @@ config_xHTTP() {
     filter_valid_ips
     interactive_params
 
-    # 修正：提前声明根级别的 routing 配置
+    # 提前声明根级别的 routing 配置
     config_content="[routing]
 domainStrategy = \"IPIfNonMatch\"
 
@@ -183,13 +184,9 @@ domainStrategy = \"IPIfNonMatch\"
         port=$((START_PORT + index))
         tag="tag_$((index+1))"
 
-        if [[ -z "$CUSTOM_UUID" ]]; then
-            uuid=$(/usr/local/bin/xHTTP uuid)
-        else
-            uuid="$CUSTOM_UUID"
-        fi
+        # 【修改点】：直接使用在循环外生成的全局 UUID
+        uuid="$GLOBAL_UUID"
 
-        # 修正：补充缺少的 security = "reality"；修改 inboundTag 为数组格式
         config_content+="[[inbounds]]
 port = $port
 protocol = \"vless\"
@@ -233,7 +230,6 @@ outboundTag = \"$tag\"
             host="$ip"
         fi
 
-        # 修正：XHTTP 使用的参数名是 path 和 sni，不是 gRPC 的 spx 和老旧的 serverName
         spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
         v2rayn_link="vless://$uuid@$host:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-$ip"
 
