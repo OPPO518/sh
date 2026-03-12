@@ -3,9 +3,6 @@
 DEFAULT_START_PORT=20000
 IP_ADDRESSES=($(hostname -I))
 
-############################################
-# y/n 输入校验
-############################################
 ask_yn() {
     local prompt="$1"
     local answer
@@ -19,9 +16,6 @@ ask_yn() {
     done
 }
 
-############################################
-# 参数校验函数
-############################################
 validate_port() {
     local port="$1"
     [[ "$port" =~ ^[0-9]+$ ]] && (( port>=1 && port<=65535 ))
@@ -37,9 +31,6 @@ validate_path() {
     [[ "$1" =~ ^/[^[:space:]]*$ ]]
 }
 
-############################################
-# 安装最新 Xray 并重命名为 xHTTP
-############################################
 install_xHTTP() {
     echo "安装最新 Xray（重命名为 xHTTP）..."
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
@@ -75,9 +66,6 @@ EOF
     systemctl enable xHTTP.service
 }
 
-############################################
-# 过滤无效 IP
-############################################
 filter_valid_ips() {
     valid_ips=()
     for ip in "${IP_ADDRESSES[@]}"; do
@@ -89,9 +77,6 @@ filter_valid_ips() {
     IP_ADDRESSES=("${valid_ips[@]}")
 }
 
-############################################
-# Reality 密钥生成
-############################################
 generate_reality_keys() {
     echo "生成 Reality 密钥..."
     key_output=$(/usr/local/bin/xHTTP x25519)
@@ -99,16 +84,11 @@ generate_reality_keys() {
     PUBLIC_KEY=$(echo "$key_output" | grep Public | awk '{print $3}')
 }
 
-############################################
-# 交互式参数
-############################################
 interactive_params() {
-
-    # 伪装站点
     custom_dest=$(ask_yn "是否自定义伪装站点？默认: www.cloudflare.com")
     if [[ "$custom_dest" == "y" ]]; then
         while true; do
-            read -p "请输入伪装站点（例如 www.cloudflare.com）: " REALITY_TARGET
+            read -p "请输入伪装站点（例如 swcdn.apple.com）: " REALITY_TARGET
             [[ -n "$REALITY_TARGET" ]] && break
             echo "伪装站点不能为空."
         done
@@ -116,7 +96,6 @@ interactive_params() {
         REALITY_TARGET="www.cloudflare.com"
     fi
 
-    # UUID：是否自定义，否则用 xHTTP uuid 自动生成
     custom_uuid=$(ask_yn "是否自定义 UUID？默认使用 xHTTP uuid 自动生成")
     if [[ "$custom_uuid" == "y" ]]; then
         while true; do
@@ -128,7 +107,6 @@ interactive_params() {
         CUSTOM_UUID=""
     fi
 
-    # Reality 密钥对
     custom_key=$(ask_yn "是否自定义 Reality 公钥/私钥？默认自动生成")
     if [[ "$custom_key" == "y" ]]; then
         while true; do
@@ -141,7 +119,6 @@ interactive_params() {
         generate_reality_keys
     fi
 
-    # shortId
     custom_sid=$(ask_yn "是否自定义 shortId？默认自动生成 16 hex")
     if [[ "$custom_sid" == "y" ]]; then
         while true; do
@@ -150,10 +127,9 @@ interactive_params() {
             echo "shortId 必须为 8-16 位十六进制字符."
         done
     else
-        SHORT_ID=$(openssl rand -hex 8)   # 16 hex
+        SHORT_ID=$(openssl rand -hex 8)
     fi
 
-    # XHTTP path
     custom_path=$(ask_yn "是否自定义 XHTTP path？默认自动生成")
     if [[ "$custom_path" == "y" ]]; then
         while true; do
@@ -165,7 +141,6 @@ interactive_params() {
         XHTTP_PATH="/Client_upload_$(openssl rand -hex 4)"
     fi
 
-    # 起始端口
     custom_port=$(ask_yn "是否自定义起始端口？默认: $DEFAULT_START_PORT")
     if [[ "$custom_port" == "y" ]]; then
         while true; do
@@ -178,9 +153,6 @@ interactive_params() {
     fi
 }
 
-############################################
-# 生成配置
-############################################
 config_xHTTP() {
     mkdir -p /etc/xHTTP
     filter_valid_ips
@@ -195,16 +167,12 @@ config_xHTTP() {
         port=$((START_PORT + index))
         tag="tag_$((index+1))"
 
-        # UUID：如果未自定义，则用 xHTTP uuid 生成
         if [[ -z "$CUSTOM_UUID" ]]; then
             uuid=$(/usr/local/bin/xHTTP uuid)
         else
             uuid="$CUSTOM_UUID"
         fi
 
-        ############################################
-        # 写入 Xray 配置
-        ############################################
         config_content+="
 [[inbounds]]
 port = $port
@@ -241,16 +209,16 @@ inboundTag = \"$tag\"
 outboundTag = \"$tag\"
 "
 
-        ############################################
-        # 生成 v2rayN 链接
-        ############################################
-        # spx 需要 URL 编码 / → %2F
-        spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
-        v2rayn_link="vless://$uuid@$ip:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&spx=$spx_enc&serverName=$REALITY_TARGET#xHTTP-$ip"
+        # IPv6 需要加中括号
+        if [[ "$ip" == *:* ]]; then
+            host="[$ip]"
+        else
+            host="$ip"
+        fi
 
-        ############################################
-        # 写入 clients.txt
-        ############################################
+        spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
+        v2rayn_link="vless://$uuid@$host:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&spx=$spx_enc&serverName=$REALITY_TARGET#xHTTP-$ip"
+
         {
             echo "IP: $ip"
             echo "端口: $port"
@@ -277,9 +245,6 @@ outboundTag = \"$tag\"
     echo ""
 }
 
-############################################
-# 主程序
-############################################
 main() {
     [ -x /usr/local/bin/xHTTP ] || install_xHTTP
     config_xHTTP
