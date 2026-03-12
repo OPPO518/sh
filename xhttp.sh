@@ -45,8 +45,8 @@ install_xHTTP() {
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
 
     echo "获取最新版本号..."
-    LATEST_TAG=$(curl -s https://github.com/XTLS/Xray-core/releases/latest \
-        | grep -oP 'tag/\K[^"]+')
+    LATEST_TAG=$(curl -sL https://github.com/XTLS/Xray-core/releases/latest \
+        | grep -oP 'releases/tag/\K[^"]+')
 
     if [[ -z "$LATEST_TAG" ]]; then
         echo "无法获取最新版本号，请检查网络或 GitHub 访问情况."
