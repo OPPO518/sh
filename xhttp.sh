@@ -7,11 +7,11 @@ ask_yn() {
     local prompt="$1"
     local answer
     while true; do
-        read -p "$prompt (y/n): " answer
+        read -p "$prompt (y/n): " answer >&2
         case "$answer" in
             y|Y) echo "y"; return ;;
             n|N) echo "n"; return ;;
-            *) echo "请输入 y 或 n." ;;
+            *) echo "请输入 y 或 n." >&2 ;;
         esac
     done
 }
@@ -64,7 +64,8 @@ EOF
 filter_valid_ips() {
     valid_ips=()
     for ip in "${IP_ADDRESSES[@]}"; do
-        if [[ $ip =~ ^127\. ]] || [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\.16 ]] || [[ $ip =~ ^192\.168 ]]; then
+        # 过滤掉 127.x, 私有 IPv4 以及 IPv6 的 loopback 和 fe80 链路本地地址
+        if [[ $ip =~ ^127\. ]] || [[ $ip =~ ^10\. ]] || [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || [[ $ip =~ ^192\.168\. ]] || [[ $ip =~ ^::1$ ]] || [[ $ip =~ ^fe80: ]]; then
             continue
         fi
         valid_ips+=("$ip")
@@ -73,7 +74,7 @@ filter_valid_ips() {
 }
 
 ############################################
-# 新版 Reality 密钥解析（PrivateKey / Password / Hash32）
+# 新版 Reality 密钥解析（PrivateKey / Password）
 ############################################
 generate_reality_keys() {
     echo "生成 Reality 密钥..."
@@ -81,8 +82,9 @@ generate_reality_keys() {
 
     echo "$key_output"
 
-    PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | sed 's/.*PrivateKey: *//I')
-    PUBLIC_KEY=$(echo "$key_output" | grep -i 'Password'   | sed 's/.*Password: *//I')
+    # 适配你当前内核的输出格式：PrivateKey 和 Password
+    PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | awk -F': ' '{print $2}' | tr -d ' ')
+    PUBLIC_KEY=$(echo "$key_output" | grep -i 'Password' | awk -F': ' '{print $2}' | tr -d ' ')
 
     if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
         echo "Reality 密钥解析失败，请检查 xHTTP x25519 输出格式"
@@ -168,7 +170,11 @@ config_xHTTP() {
     filter_valid_ips
     interactive_params
 
-    config_content=""
+    # 修正：提前声明根级别的 routing 配置
+    config_content="[routing]
+domainStrategy = \"IPIfNonMatch\"
+
+"
     index=0
 
     echo "" > /etc/xHTTP/clients.txt
@@ -183,8 +189,8 @@ config_xHTTP() {
             uuid="$CUSTOM_UUID"
         fi
 
-        config_content+="
-[[inbounds]]
+        # 修正：补充缺少的 security = "reality"；修改 inboundTag 为数组格式
+        config_content+="[[inbounds]]
 port = $port
 protocol = \"vless\"
 tag = \"$tag\"
@@ -197,6 +203,7 @@ id = \"$uuid\"
 
 [inbounds.streamSettings]
 network = \"xhttp\"
+security = \"reality\"
 
 [inbounds.streamSettings.xhttpSettings]
 path = \"$XHTTP_PATH\"
@@ -215,8 +222,9 @@ tag = \"$tag\"
 
 [[routing.rules]]
 type = \"field\"
-inboundTag = \"$tag\"
+inboundTag = [\"$tag\"]
 outboundTag = \"$tag\"
+
 "
 
         if [[ "$ip" == *:* ]]; then
@@ -225,8 +233,9 @@ outboundTag = \"$tag\"
             host="$ip"
         fi
 
+        # 修正：XHTTP 使用的参数名是 path 和 sni，不是 gRPC 的 spx 和老旧的 serverName
         spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
-        v2rayn_link="vless://$uuid@$host:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&spx=$spx_enc&serverName=$REALITY_TARGET#xHTTP-$ip"
+        v2rayn_link="vless://$uuid@$host:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-$ip"
 
         {
             echo "IP: $ip"
@@ -238,7 +247,7 @@ outboundTag = \"$tag\"
             echo "XHTTP Path: $XHTTP_PATH"
             echo "v2rayN 链接:"
             echo "$v2rayn_link"
-            echo ""
+            echo "--------------------------------"
         } >> /etc/xHTTP/clients.txt
 
         index=$((index+1))
@@ -251,6 +260,7 @@ outboundTag = \"$tag\"
     echo ""
     echo "Reality + XHTTP 配置生成完成"
     echo "客户端配置已写入: /etc/xHTTP/clients.txt"
+    echo "你可以使用 cat /etc/xHTTP/clients.txt 查看节点链接"
     echo ""
 }
 
