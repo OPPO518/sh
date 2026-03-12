@@ -79,9 +79,22 @@ filter_valid_ips() {
 
 generate_reality_keys() {
     echo "生成 Reality 密钥..."
-    key_output=$(/usr/local/bin/xHTTP x25519)
-    PRIVATE_KEY=$(echo "$key_output" | grep Private | awk '{print $3}')
-    PUBLIC_KEY=$(echo "$key_output" | grep Public | awk '{print $3}')
+    key_output=$(/usr/local/bin/xHTTP x25519 2>/dev/null)
+
+    echo "$key_output"
+
+    PRIVATE_KEY=$(echo "$key_output" | grep -i 'Private key' | sed 's/.*Private key: *//I')
+    PUBLIC_KEY=$(echo "$key_output" | grep -i 'Public key'  | sed 's/.*Public key: *//I')
+
+    if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
+        echo "解析 Reality 公钥/私钥失败，请手动执行："
+        echo "/usr/local/bin/xHTTP x25519"
+        echo "确认输出格式，再调整脚本解析逻辑。"
+        exit 1
+    fi
+
+    echo "私钥: $PRIVATE_KEY"
+    echo "公钥: $PUBLIC_KEY"
 }
 
 interactive_params() {
