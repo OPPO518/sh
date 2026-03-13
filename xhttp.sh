@@ -105,44 +105,69 @@ filter_valid_ips() {
 }
 
 ############################################
-# 本地 WARP 提取 (原生算法 + 强效防伪)
+# 终极本地 WARP 注册 (精准提取避开陷阱)
 ############################################
 generate_warp_auto() {
     echo "================================================="
-    echo "正在注入并启动最强防封 WARP 引擎..."
+    echo "正在使用 3x-ui 同款算法进行本地 WARP 注册..."
     echo "================================================="
     
-    mkdir -p /tmp/warp_work
-    cd /tmp/warp_work
-    identify_arch
-    curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
-    chmod +x warpapi
+    if ! command -v wg &> /dev/null; then
+        apt-get install -y wireguard-tools 2>/dev/null || yum install -y wireguard-tools 2>/dev/null
+    fi
     
-    # 模拟高级指纹注册
-    output=$(./warpapi 2>/dev/null)
-    WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r\n')
-    CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r\n')
-    cd - >/dev/null
-    rm -rf /tmp/warp_work
-
-    if [[ -n "$WARP_PRIVATE_KEY" && -n "$CLIENT_ID" ]]; then
-        # 你的日志证明了这一步的计算绝对完美，我们坚决保留！
-        CLEAN_HEX=$(echo "$CLIENT_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]')
-        R1=$((16#${CLEAN_HEX:0:2}))
-        R2=$((16#${CLEAN_HEX:2:2}))
-        R3=$((16#${CLEAN_HEX:4:2}))
+    WARP_PRIVATE_KEY_GEN=$(wg genkey 2>/dev/null)
+    WARP_PUBLIC_KEY=$(echo "$WARP_PRIVATE_KEY_GEN" | wg pubkey 2>/dev/null)
+    INSTALL_ID=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)
+    TOS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    
+    DATA="{\"key\":\"${WARP_PUBLIC_KEY}\",\"tos\":\"${TOS}\",\"type\":\"PC\",\"model\":\"x-ui\",\"name\":\"${INSTALL_ID}\"}"
+    
+    RESPONSE=$(curl -s --max-time 8 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
+      -H "CF-Client-Version: a-7.21-0721" \
+      -H "Content-Type: application/json" \
+      -d "$DATA")
+      
+    # 核心防坑：直接提取独一无二的 client_id (Base64)，绝不去碰会重名的 id 字段
+    B64_CLIENT_ID=$(echo "$RESPONSE" | grep -o '"client_id":"[^"]*"' | cut -d'"' -f4 | head -n 1 | tr -d '\r\n')
+    
+    if [[ -n "$B64_CLIENT_ID" ]]; then
+        # 纯原生 Bash 提取成功，使用 od 命令安全解码 Base64 为 16 进制流
+        HEX_STR=$(echo -n "$B64_CLIENT_ID" | base64 -d 2>/dev/null | od -A n -t x1 | tr -d ' \n')
+        WARP_PRIVATE_KEY="$WARP_PRIVATE_KEY_GEN"
+    else
+        echo -e "\033[33m原生 API 请求受限，正在启用 warpapi 高级指纹伪装绕过...\033[0m"
+        mkdir -p /tmp/warp_work
+        cd /tmp/warp_work
+        identify_arch
+        curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
+        chmod +x warpapi
+        output=$(./warpapi 2>/dev/null)
+        WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r\n')
+        DEVICE_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r\n')
+        HEX_STR=$(echo "$DEVICE_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c 1-6)
+        cd - >/dev/null
+        rm -rf /tmp/warp_work
+    fi
+    
+    if [[ -n "$WARP_PRIVATE_KEY" && -n "$HEX_STR" ]]; then
+        R1=$((16#${HEX_STR:0:2}))
+        R2=$((16#${HEX_STR:2:2}))
+        R3=$((16#${HEX_STR:4:2}))
         WARP_RESERVED="$R1, $R2, $R3"
         
         WARP_IPV4="172.16.0.2"
         WARP_ENABLE=true
         
-        echo -e "\033[32mWARP 密钥生成与阵列换算完美收官！\033[0m"
-        echo "提取原生 Reserved: [$WARP_RESERVED]"
+        echo -e "\033[32mWARP 注册并解析成功！\033[0m"
+        echo "分配专属 IPv4: $WARP_IPV4"
+        echo "动态计算真 Reserved: [$WARP_RESERVED]"
         echo "================================================="
         return
     fi
 
-    echo -e "\033[31m自动提取受限，触发手工兜底！\033[0m"
+    echo -e "\033[31m所有自动提取手段均失效！\033[0m"
+    echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
     input_warp_keys
 }
 
@@ -308,7 +333,6 @@ ip = [\"geoip:cn\"]
 outboundTag = \"warp-ipv4\"
 
 "
-        # 核心网络修复：MTU 降至 1280，Endpoint 锁死 IPv4
         outbounds_section+="[[outbounds]]
 tag = \"warp-ipv4\"
 protocol = \"wireguard\"
@@ -324,7 +348,7 @@ reserved = [$WARP_RESERVED]
 [[outbounds.settings.peers]]
 publicKey = \"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\"
 allowedIPs = [\"0.0.0.0/0\"]
-endpoint = \"162.159.192.1:2408\"
+endpoint = \"engage.cloudflareclient.com:2408\"
 keepAlive = 25
 
 "
@@ -463,7 +487,6 @@ outboundTag = \"warp-ipv4\"
         echo "正在测试 WARP 底层连通性 (请稍候)..."
         sleep 4
         
-        # 核心修复 3：更换为最稳定且必定返回状态的 CF 官方探针
         TRACE=$(curl -s --connect-timeout 8 -x socks5h://127.0.0.1:40000 https://1.1.1.1/cdn-cgi/trace)
         WARP_STATUS=$(echo "$TRACE" | grep warp= | cut -d= -f2 | tr -d '\r\n')
         REAL_WARP_IP=$(echo "$TRACE" | grep ip= | cut -d= -f2 | tr -d '\r\n')
