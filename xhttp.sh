@@ -42,12 +42,24 @@ install_xHTTP() {
     echo "安装最新 Xray（重命名为 xHTTP）..."
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
 
+    # 建立专属文件夹，确保 geo 数据库文件与内核在同一目录
+    mkdir -p /usr/local/xHTTP
+    cd /usr/local/xHTTP
+
     echo "下载最新 Xray 内核..."
     curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
 
+    # 解压并重命名内核
     unzip -o xray.zip
-    mv xray /usr/local/bin/xHTTP
-    chmod +x /usr/local/bin/xHTTP
+    mv xray xHTTP
+    chmod +x xHTTP
+    rm -f xray.zip
+
+    # 创建软链接，完美兼容脚本其他地方的 /usr/local/bin/xHTTP 路径
+    ln -sf /usr/local/xHTTP/xHTTP /usr/local/bin/xHTTP
+
+    # 切回原目录，防止后续路径错乱
+    cd - >/dev/null
 
     cat <<EOF >/etc/systemd/system/xHTTP.service
 [Unit]
