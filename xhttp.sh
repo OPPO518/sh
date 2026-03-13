@@ -112,7 +112,6 @@ generate_warp_auto() {
     echo "正在使用 3x-ui 同款算法进行本地 WARP 注册..."
     echo "================================================="
     
-    # 方案 1：尝试使用纯 Bash 模拟 3x-ui 请求 (最干净，无第三方依赖)
     if ! command -v wg &> /dev/null; then
         apt-get install -y wireguard-tools 2>/dev/null || yum install -y wireguard-tools 2>/dev/null
     fi
@@ -122,7 +121,6 @@ generate_warp_auto() {
     INSTALL_ID=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)
     TOS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
     
-    # 模拟 PC 端请求，避免触发 Android 版封控
     DATA="{\"key\":\"${WARP_PUBLIC_KEY}\",\"tos\":\"${TOS}\",\"type\":\"PC\",\"model\":\"x-ui\",\"name\":\"${INSTALL_ID}\"}"
     
     RESPONSE=$(curl -s --max-time 8 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
@@ -130,10 +128,9 @@ generate_warp_auto() {
       -H "Content-Type: application/json" \
       -d "$DATA")
       
-    CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | cut -d'"' -f4)
+    # 核心修复 1：严格限制只取第一行，剔除任何换行符干扰
+    CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -n 1 | tr -d '\r\n')
     
-    # 方案 2：如果纯 Bash 被限流拦截，立刻启用你测试成功的 warpapi 绕过指纹！
     if [[ -z "$CLIENT_ID" ]]; then
         echo -e "\033[33m原生 API 请求受限，正在启用 warpapi 高级指纹伪装绕过...\033[0m"
         mkdir -p /tmp/warp_work
@@ -142,30 +139,30 @@ generate_warp_auto() {
         curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
         chmod +x warpapi
         output=$(./warpapi 2>/dev/null)
-        WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r')
-        CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r')
-        WARP_IPV4="172.16.0.2"
+        WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r\n')
+        CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r\n')
         cd - >/dev/null
         rm -rf /tmp/warp_work
     fi
     
     if [[ -n "$WARP_PRIVATE_KEY" && -n "$CLIENT_ID" ]]; then
-        # 【全场最重要的修复！】：CLIENT_ID 是 UUID，直接截取前 6 位 Hex 转 10 进制！
         CLEAN_HEX=$(echo "$CLIENT_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]')
         R1=$((16#${CLEAN_HEX:0:2}))
         R2=$((16#${CLEAN_HEX:2:2}))
         R3=$((16#${CLEAN_HEX:4:2}))
         WARP_RESERVED="$R1, $R2, $R3"
+        
+        # 核心修复 2：直接写死分配的虚拟内网 IP，彻底杜绝正则抓取出错引起的换行崩溃
+        WARP_IPV4="172.16.0.2"
         WARP_ENABLE=true
         
         echo -e "\033[32mWARP 注册并解析成功！\033[0m"
-        echo "分配专属 IPv4: $WARP_IPV4"
-        echo "动态计算 Reserved: [$WARP_RESERVED] (修复版)"
+        echo "分配专属 IPv4: $WARP_IPV4 (已修正锁定)"
+        echo "动态计算 Reserved: [$WARP_RESERVED]"
         echo "================================================="
         return
     fi
 
-    # 方案 3：连防线都跌破了，那就必须触发防呆手工兜底
     echo -e "\033[31m所有自动提取手段均失效！\033[0m"
     echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
     input_warp_keys
