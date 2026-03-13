@@ -73,7 +73,54 @@ filter_valid_ips() {
 }
 
 ############################################
-# 新版 Reality 密钥解析（PrivateKey / Password）
+# WARP API 自动注册提取 (用于 IPv6 的 IPv4 兜底)
+############################################
+generate_warp_keys() {
+    echo "================================================="
+    echo "检测到存在 IPv6 地址，正在自动注册 WARP 获取 IPv4 兜底密钥..."
+    echo "================================================="
+    
+    if ! command -v wg &> /dev/null; then
+        apt-get install -y wireguard-tools 2>/dev/null || yum install -y wireguard-tools 2>/dev/null
+    fi
+    if ! command -v xxd &> /dev/null; then
+        apt-get install -y xxd 2>/dev/null || yum install -y vim-common 2>/dev/null
+    fi
+
+    WARP_PRIVATE_KEY=$(wg genkey)
+    WARP_PUBLIC_KEY=$(echo "$WARP_PRIVATE_KEY" | wg pubkey)
+
+    INSTALL_ID=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 22 | head -n 1)
+    FCM_TOKEN="${INSTALL_ID}:APA91b"
+    TOS=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+
+    RESPONSE=$(curl -s -A "okhttp/3.12.1" -H "CF-Client-Version: a-6.11-3306" \
+        -X POST "https://api.cloudflareclient.com/v0a884/reg" \
+        -d "{\"key\":\"$WARP_PUBLIC_KEY\",\"install_id\":\"$INSTALL_ID\",\"fcm_token\":\"$FCM_TOKEN\",\"tos\":\"$TOS\",\"model\":\"Linux\",\"build\":\"27.0\",\"locale\":\"en_US\"}")
+
+    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | awk -F'"' '{print $4}')
+    CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | awk -F'"' '{print $4}')
+
+    if [[ -z "$WARP_IPV4" || -z "$CLIENT_ID" ]]; then
+        echo "WARP 自动注册失败！IPv6 节点可能无法访问 IPv4 网站。"
+        WARP_ENABLE=false
+        return
+    fi
+
+    RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
+    R1=$((16#${RESERVED_HEX:0:2}))
+    R2=$((16#${RESERVED_HEX:2:2}))
+    R3=$((16#${RESERVED_HEX:4:2}))
+    WARP_RESERVED="[$R1, $R2, $R3]"
+    WARP_ENABLE=true
+    
+    echo "WARP 注册成功! 分配专属 IPv4: $WARP_IPV4"
+    echo "Reserved 计算完毕: $WARP_RESERVED"
+    echo "================================================="
+}
+
+############################################
+# 新版 Reality 密钥解析
 ############################################
 generate_reality_keys() {
     echo "生成 Reality 密钥..."
@@ -160,16 +207,50 @@ interactive_params() {
 config_xHTTP() {
     mkdir -p /etc/xHTTP
     filter_valid_ips
+    
+    WARP_ENABLE=false
+    for ip in "${IP_ADDRESSES[@]}"; do
+        if [[ "$ip" == *":"* ]]; then
+            generate_warp_keys
+            break
+        fi
+    done
+
     interactive_params
 
     config_content="[routing]
 domainStrategy = \"IPIfNonMatch\"
 
 "
+    inbounds_section=""
+    outbounds_section=""
+    routing_section=""
+
+    if [ "$WARP_ENABLE" = true ]; then
+        outbounds_section+="[[outbounds]]
+tag = \"warp-ipv4\"
+protocol = \"wireguard\"
+
+[outbounds.settings]
+mtu = 1420
+secretKey = \"$WARP_PRIVATE_KEY\"
+address = [\"$WARP_IPV4/32\"]
+workers = 2
+domainStrategy = \"ForceIPv4\"
+reserved = $WARP_RESERVED
+
+[[outbounds.settings.peers]]
+publicKey = \"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\"
+allowedIPs = [\"0.0.0.0/0\"]
+endpoint = \"[2606:4700:d0::a29f:c001]:2408\"
+keepAlive = 0
+
+"
+    fi
+
     index=0
     v2rayn_links=""
 
-    # 提取第一个 IP 作为主入口 IP
     MAIN_IP="${IP_ADDRESSES[0]}"
     if [[ "$MAIN_IP" == *:* ]]; then
         CONN_IP="[$MAIN_IP]"
@@ -179,13 +260,14 @@ domainStrategy = \"IPIfNonMatch\"
 
     for ip in "${IP_ADDRESSES[@]}"; do
         port=$((START_PORT + index))
-        tag="tag_$((index+1))"
+        in_tag="in_$((index+1))"
+        out_tag="out_$((index+1))"
         uuid="$GLOBAL_UUID"
 
-        config_content+="[[inbounds]]
+        inbounds_section+="[[inbounds]]
 port = $port
 protocol = \"vless\"
-tag = \"$tag\"
+tag = \"$in_tag\"
 
 [inbounds.settings]
 decryption = \"none\"
@@ -199,6 +281,7 @@ security = \"reality\"
 
 [inbounds.streamSettings.xhttpSettings]
 path = \"$XHTTP_PATH\"
+mode = \"auto\"
 
 [inbounds.streamSettings.realitySettings]
 show = false
@@ -207,21 +290,38 @@ serverNames = [\"$REALITY_TARGET\"]
 privateKey = \"$PRIVATE_KEY\"
 shortIds = [\"$SHORT_ID\"]
 
-[[outbounds]]
+"
+        outbounds_section+="[[outbounds]]
 sendThrough = \"$ip\"
 protocol = \"freedom\"
-tag = \"$tag\"
+tag = \"$out_tag\"
+
+"
+        if [[ "$ip" == *":"* ]] && [ "$WARP_ENABLE" = true ]; then
+            routing_section+="[[routing.rules]]
+type = \"field\"
+inboundTag = [\"$in_tag\"]
+ip = [\"0.0.0.0/0\"]
+outboundTag = \"warp-ipv4\"
 
 [[routing.rules]]
 type = \"field\"
-inboundTag = [\"$tag\"]
-outboundTag = \"$tag\"
+inboundTag = [\"$in_tag\"]
+ip = [\"[::]/0\"]
+outboundTag = \"$out_tag\"
 
 "
+        else
+            routing_section+="[[routing.rules]]
+type = \"field\"
+inboundTag = [\"$in_tag\"]
+outboundTag = \"$out_tag\"
+
+"
+        fi
 
         spx_enc=$(echo -n "$XHTTP_PATH" | sed 's/\//%2F/g')
-        # 所有链接统一使用 CONN_IP 作为连接地址，仅通过端口和别名区分
-        v2rayn_link="vless://$uuid@$CONN_IP:$port?encryption=none&flow=&type=xhttp&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-$ip"
+        v2rayn_link="vless://$uuid@$CONN_IP:$port?encryption=none&flow=&type=xhttp&mode=auto&security=reality&pbk=$PUBLIC_KEY&sid=$SHORT_ID&fp=chrome&path=$spx_enc&sni=$REALITY_TARGET#xHTTP-${ip}"
         v2rayn_links+="$v2rayn_link\n"
 
         index=$((index+1))
@@ -229,7 +329,9 @@ outboundTag = \"$tag\"
 
     END_PORT=$((START_PORT + index - 1))
 
-    # 生成最终的整合日志
+    config_content="${config_content}${inbounds_section}${outbounds_section}${routing_section}"
+    echo -e "$config_content" >/etc/xHTTP/config.toml
+    
     {
         echo "IP: $MAIN_IP"
         if [ "$START_PORT" -eq "$END_PORT" ]; then
@@ -246,7 +348,6 @@ outboundTag = \"$tag\"
         echo -e "$v2rayn_links"
     } > /etc/xHTTP/clients.txt
 
-    echo -e "$config_content" >/etc/xHTTP/config.toml
     systemctl restart xHTTP.service
     systemctl --no-pager status xHTTP.service
 
