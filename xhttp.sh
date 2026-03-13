@@ -111,12 +111,12 @@ filter_valid_ips() {
 }
 
 ############################################
-# 官方 wgcf 自动生成 WARP (失败则自动降级)
+# 高级指纹伪装自动生成 WARP (失败自动降级)
 ############################################
-generate_warp_wgcf() {
+generate_warp_warpapi() {
     identify_arch
     echo "================================================="
-    echo "正在使用官方 wgcf 工具自动注册 WARP 账号..."
+    echo "正在使用高级指纹伪装接口自动注册 WARP 账号..."
     echo "================================================="
     
     # 确保依赖存在
@@ -125,56 +125,47 @@ generate_warp_wgcf() {
     fi
 
     # 创建临时工作目录
-    mkdir -p /tmp/wgcf_work
-    cd /tmp/wgcf_work
+    mkdir -p /tmp/warp_work
+    cd /tmp/warp_work
 
-    echo "下载 wgcf (架构: $MACHINE_WGCF)..."
-    # 获取最新 wgcf 下载直链
-    WGCF_URL=$(curl -sL "https://api.github.com/repos/ViRb3/wgcf/releases/latest" | grep "browser_download_url" | grep "linux_${MACHINE_WGCF}" | cut -d '"' -f 4 | head -n 1)
-    if [ -z "$WGCF_URL" ]; then
-        WGCF_URL="https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_${MACHINE_WGCF}"
-    fi
+    echo "获取核心注册组件 (架构: $MACHINE_WGCF)..."
+    # 白嫖甬哥编译好的高级指纹绕过组件
+    curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
+    chmod +x warpapi
 
-    curl -sL -o wgcf "$WGCF_URL"
-    chmod +x wgcf
+    # 运行并静默提取关键参数
+    echo "伪装请求中，请稍候..."
+    output=$(./warpapi 2>/dev/null)
+    
+    WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r')
+    CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r')
+    WARP_IPV4="172.16.0.2"
 
-    echo "请求 Cloudflare API 注册账号..."
-    ./wgcf register --accept-tos >/dev/null 2>&1
-    sleep 2
-    ./wgcf generate >/dev/null 2>&1
-
-    # 开始解析与提取
-    if [ -f "wgcf-profile.conf" ] && [ -f "wgcf-account.toml" ]; then
-        WARP_PRIVATE_KEY=$(grep 'PrivateKey' wgcf-profile.conf | awk -F'= ' '{print $2}' | tr -d ' ' | tr -d '\r')
-        WARP_IPV4=$(grep 'Address' wgcf-profile.conf | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | head -n 1)
-        CLIENT_ID=$(grep 'client_id' wgcf-account.toml | awk -F"'" '{print $2}')
-
-        if [[ -n "$WARP_PRIVATE_KEY" && -n "$WARP_IPV4" && -n "$CLIENT_ID" ]]; then
-            # 精准换算 Reserved 数组
-            RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
-            R1=$((16#${RESERVED_HEX:0:2}))
-            R2=$((16#${RESERVED_HEX:2:2}))
-            R3=$((16#${RESERVED_HEX:4:2}))
-            WARP_RESERVED="$R1, $R2, $R3"
-            WARP_ENABLE=true
-            
-            echo -e "\033[32mwgcf 自动注册并解析成功！\033[0m"
-            echo "分配专属 IPv4: $WARP_IPV4"
-            echo "动态计算 Reserved: [$WARP_RESERVED]"
-            echo "================================================="
-            
-            # 清理现场并返回
-            cd - >/dev/null
-            rm -rf /tmp/wgcf_work
-            return
-        fi
+    if [[ -n "$WARP_PRIVATE_KEY" && -n "$CLIENT_ID" ]]; then
+        # 基于 Client ID 精准换算 Xray 所需的 Reserved 数组
+        RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
+        R1=$((16#${RESERVED_HEX:0:2}))
+        R2=$((16#${RESERVED_HEX:2:2}))
+        R3=$((16#${RESERVED_HEX:4:2}))
+        WARP_RESERVED="$R1, $R2, $R3"
+        WARP_ENABLE=true
+        
+        echo -e "\033[32m伪装注册并解析成功！\033[0m"
+        echo "分配专属 IPv4: $WARP_IPV4"
+        echo "动态计算 Reserved: [$WARP_RESERVED]"
+        echo "================================================="
+        
+        # 阅后即焚，清理现场
+        cd - >/dev/null
+        rm -rf /tmp/warp_work
+        return
     fi
 
     # 如果运行到这里，说明自动提取失败，触发降级
-    echo -e "\033[31m自动提取失败（可能遇 Cloudflare 限制拦截）！\033[0m"
+    echo -e "\033[31m自动提取失败（极少数高强度拦截地区）！\033[0m"
     echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
     cd - >/dev/null
-    rm -rf /tmp/wgcf_work
+    rm -rf /tmp/warp_work
     input_warp_keys
 }
 
@@ -299,11 +290,11 @@ config_xHTTP() {
     done
 
     if [ "$HAS_IPV6" = true ]; then
-        generate_warp_wgcf
+        generate_warp_warpapi
     else
         add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要配置 WARP (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
         if [[ "$add_warp" == "y" ]]; then
-            generate_warp_wgcf
+            generate_warp_warpapi
         fi
     fi
 
