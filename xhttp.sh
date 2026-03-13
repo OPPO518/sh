@@ -73,54 +73,29 @@ filter_valid_ips() {
 }
 
 ############################################
-# WARP API 自动注册提取 (用于 IPv6 的 IPv4 兜底)
+# WARP 手动配置 (用于 IPv6 的 IPv4 兜底)
 ############################################
-generate_warp_keys() {
+input_warp_keys() {
     echo "================================================="
-    echo "检测到存在 IPv6 地址，正在自动注册 WARP 获取 IPv4 兜底密钥..."
+    echo "检测到存在 IPv6 地址，需要配置 WARP 作为 IPv4 兜底"
     echo "================================================="
-    
-    if ! command -v wg &> /dev/null; then
-        apt-get install -y wireguard-tools 2>/dev/null || yum install -y wireguard-tools 2>/dev/null
-    fi
-    if ! command -v xxd &> /dev/null; then
-        apt-get install -y xxd 2>/dev/null || yum install -y vim-common 2>/dev/null
-    fi
+    while true; do
+        read -p "请输入可用的 WARP secretKey (例如: gKcCAxJWa...): " WARP_PRIVATE_KEY
+        [[ -n "$WARP_PRIVATE_KEY" ]] && break
+    done
 
-    WARP_PRIVATE_KEY=$(wg genkey)
-    WARP_PUBLIC_KEY=$(echo "$WARP_PRIVATE_KEY" | wg pubkey)
+    while true; do
+        read -p "请输入 WARP 内网 IPv4 地址 (包含掩码，例如: 172.16.0.2/32): " WARP_IPV4
+        [[ -n "$WARP_IPV4" ]] && break
+    done
 
-    INSTALL_ID=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 22 | head -n 1)
-    FCM_TOKEN="${INSTALL_ID}:APA91b"
-    TOS=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    while true; do
+        read -p "请输入 WARP reserved 数组 (例如: [71, 68, 150]): " WARP_RESERVED
+        [[ -n "$WARP_RESERVED" ]] && break
+    done
 
-    RESPONSE=$(curl -s -A "okhttp/3.12.1" -H "CF-Client-Version: a-6.11-3306" \
-        -X POST "https://api.cloudflareclient.com/v0a884/reg" \
-        -d "{\"key\":\"$WARP_PUBLIC_KEY\",\"install_id\":\"$INSTALL_ID\",\"fcm_token\":\"$FCM_TOKEN\",\"tos\":\"$TOS\",\"model\":\"Linux\",\"build\":\"27.0\",\"locale\":\"en_US\"}")
-
-    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | awk -F'"' '{print $4}' | grep '^172\.' | head -n 1)
-    
-    if [[ -z "$WARP_IPV4" ]]; then
-        WARP_IPV4="172.16.0.2"
-    fi
-
-    CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | awk -F'"' '{print $4}')
-
-    if [[ -z "$CLIENT_ID" ]]; then
-        echo "WARP 自动注册失败！IPv6 节点可能无法访问 IPv4 网站。"
-        WARP_ENABLE=false
-        return
-    fi
-
-    RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
-    R1=$((16#${RESERVED_HEX:0:2}))
-    R2=$((16#${RESERVED_HEX:2:2}))
-    R3=$((16#${RESERVED_HEX:4:2}))
-    WARP_RESERVED="[$R1, $R2, $R3]"
     WARP_ENABLE=true
-    
-    echo "WARP 注册成功! 分配专属 IPv4: $WARP_IPV4"
-    echo "Reserved 计算完毕: $WARP_RESERVED"
+    echo "WARP 参数已记录。"
     echo "================================================="
 }
 
@@ -216,7 +191,7 @@ config_xHTTP() {
     WARP_ENABLE=false
     for ip in "${IP_ADDRESSES[@]}"; do
         if [[ "$ip" == *":"* ]]; then
-            generate_warp_keys
+            input_warp_keys
             break
         fi
     done
@@ -230,6 +205,7 @@ domainStrategy = \"IPIfNonMatch\"
     inbounds_section=""
     outbounds_section=""
     routing_section=""
+    ipv6_inbounds=()
 
     if [ "$WARP_ENABLE" = true ]; then
         outbounds_section+="[[outbounds]]
@@ -239,7 +215,7 @@ protocol = \"wireguard\"
 [outbounds.settings]
 mtu = 1420
 secretKey = \"$WARP_PRIVATE_KEY\"
-address = [\"$WARP_IPV4/32\"]
+address = [\"$WARP_IPV4\"]
 workers = 2
 domainStrategy = \"ForceIPv4\"
 reserved = $WARP_RESERVED
@@ -248,8 +224,8 @@ noKernelTun = true
 [[outbounds.settings.peers]]
 publicKey = \"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\"
 allowedIPs = [\"0.0.0.0/0\"]
-endpoint = \"[2606:4700:d0::a29f:c001]:2408\"
-keepAlive = 0
+endpoint = \"engage.cloudflareclient.com:2408\"
+keepAlive = 25
 
 "
     fi
@@ -304,26 +280,13 @@ tag = \"$out_tag\"
 
 [outbounds.settings]
 "
-        # 核心修复 2：为 freedom 出站强制指定 DNS 解析的 IP 家族，防止 bind 错误
         if [[ "$ip" == *":"* ]]; then
+            ipv6_inbounds+=("\"$in_tag\"")
             outbounds_section+="domainStrategy = \"UseIPv6\"
 
 "
-        else
-            outbounds_section+="domainStrategy = \"UseIPv4\"
-
-"
-        fi
-
-        if [[ "$ip" == *":"* ]] && [ "$WARP_ENABLE" = true ]; then
-            # 核心修复 1：去除错误的方括号，使用标准的 ::/0 表示所有 IPv6 流量
+            # 原生 IPv6 路由规则 (排在前面，优先匹配双栈)
             routing_section+="[[routing.rules]]
-type = \"field\"
-inboundTag = [\"$in_tag\"]
-ip = [\"0.0.0.0/0\"]
-outboundTag = \"warp-ipv4\"
-
-[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
 ip = [\"::/0\"]
@@ -331,6 +294,9 @@ outboundTag = \"$out_tag\"
 
 "
         else
+            outbounds_section+="domainStrategy = \"UseIPv4\"
+
+"
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -345,6 +311,18 @@ outboundTag = \"$out_tag\"
 
         index=$((index+1))
     done
+
+    # 追加聚合的 WARP 兜底路由 (排在最后，仅针对纯 IPv4 流量兜底)
+    if [ "$WARP_ENABLE" = true ] && [ ${#ipv6_inbounds[@]} -gt 0 ]; then
+        ipv6_inbounds_str=$(IFS=, ; echo "${ipv6_inbounds[*]}")
+        routing_section+="[[routing.rules]]
+type = \"field\"
+inboundTag = [$ipv6_inbounds_str]
+ip = [\"0.0.0.0/0\"]
+outboundTag = \"warp-ipv4\"
+
+"
+    fi
 
     END_PORT=$((START_PORT + index - 1))
 
@@ -368,15 +346,21 @@ outboundTag = \"$out_tag\"
     } > /etc/xHTTP/clients.txt
 
     systemctl restart xHTTP.service
-    systemctl --no-pager status xHTTP.service
-
+    
     echo ""
     echo "================================================="
-    echo "        Reality + XHTTP 配置生成完成             "
+    echo "        Reality + XHTTP 配置生成成功             "
     echo "================================================="
-    cat /etc/xHTTP/clients.txt
+    systemctl --no-pager status xHTTP.service
     echo "================================================="
-    echo "客户端配置已保存至: /etc/xHTTP/clients.txt"
+    if [ "$WARP_ENABLE" = true ]; then
+        echo -e "WARP 兜底状态: \033[32m已成功注入配置\033[0m"
+        echo "绑定的 WARP IPv4: $WARP_IPV4"
+        echo "================================================="
+    fi
+    echo "节点分享链接已隐蔽保存至: /etc/xHTTP/clients.txt"
+    echo "如需复制节点，请执行: cat /etc/xHTTP/clients.txt"
+    echo "================================================="
     echo ""
 }
 
