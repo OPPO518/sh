@@ -128,7 +128,6 @@ generate_warp_auto() {
       -H "Content-Type: application/json" \
       -d "$DATA")
       
-    # 核心修复 1：严格限制只取第一行，剔除任何换行符干扰
     CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4 | head -n 1 | tr -d '\r\n')
     
     if [[ -z "$CLIENT_ID" ]]; then
@@ -152,12 +151,11 @@ generate_warp_auto() {
         R3=$((16#${CLEAN_HEX:4:2}))
         WARP_RESERVED="$R1, $R2, $R3"
         
-        # 核心修复 2：直接写死分配的虚拟内网 IP，彻底杜绝正则抓取出错引起的换行崩溃
         WARP_IPV4="172.16.0.2"
         WARP_ENABLE=true
         
         echo -e "\033[32mWARP 注册并解析成功！\033[0m"
-        echo "分配专属 IPv4: $WARP_IPV4 (已修正锁定)"
+        echo "分配专属 IPv4: $WARP_IPV4"
         echo "动态计算 Reserved: [$WARP_RESERVED]"
         echo "================================================="
         return
@@ -181,19 +179,14 @@ input_warp_keys() {
         [[ -n "$WARP_PRIVATE_KEY" ]] && break
     done
 
-    while true; do
-        read -p "请输入 WARP 内网 IPv4 地址 (例如: 172.16.0.2/32): " WARP_IPV4
-        WARP_IPV4=$(echo "$WARP_IPV4" | tr -d '[]" ')
-        [[ -n "$WARP_IPV4" ]] && break
-    done
-
+    # 砍掉了冗余的 IPv4 输入，直接后台赋值固定 IP
     while true; do
         read -p "请输入 WARP reserved 数组 (例如: 71, 68, 150): " WARP_RESERVED
         WARP_RESERVED=$(echo "$WARP_RESERVED" | tr -d '[]"')
         [[ -n "$WARP_RESERVED" ]] && break
     done
 
-    WARP_IPV4=$(echo "$WARP_IPV4" | cut -d'/' -f1)
+    WARP_IPV4="172.16.0.2"
     WARP_ENABLE=true
     echo "手动 WARP 参数已记录。"
     echo "================================================="
