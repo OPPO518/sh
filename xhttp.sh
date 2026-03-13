@@ -3,11 +3,19 @@
 DEFAULT_START_PORT=20000
 IP_ADDRESSES=($(hostname -I))
 
+# 升级版 ask_yn：支持回车直接返回默认值
 ask_yn() {
     local prompt="$1"
+    local default="$2"
     local answer
     while true; do
-        read -p "$prompt (y/n): " answer >&2
+        if [[ "$default" == "y" ]]; then
+            read -p "$prompt [Y/n]: " answer >&2
+        else
+            read -p "$prompt [y/N]: " answer >&2
+        fi
+        # 如果直接回车，使用默认值
+        answer=${answer:-$default}
         case "$answer" in
             y|Y) echo "y"; return ;;
             n|N) echo "n"; return ;;
@@ -77,7 +85,7 @@ filter_valid_ips() {
 ############################################
 input_warp_keys() {
     echo "================================================="
-    echo "检测到存在 IPv6 地址，需要配置 WARP 作为 IPv4 兜底"
+    echo "请输入配置 WARP 所需的参数"
     echo "================================================="
     while true; do
         read -p "请输入可用的 WARP secretKey (例如: gKcCAxJWa...): " WARP_PRIVATE_KEY
@@ -106,7 +114,7 @@ input_warp_keys() {
 # 新版 Reality 密钥解析
 ############################################
 generate_reality_keys() {
-    echo "生成 Reality 密钥..."
+    echo ">> 自动生成 Reality 密钥..."
     key_output=$(/usr/local/bin/xHTTP x25519 2>/dev/null)
 
     PRIVATE_KEY=$(echo "$key_output" | grep -i 'PrivateKey' | awk -F': ' '{print $2}' | tr -d ' ')
@@ -119,68 +127,63 @@ generate_reality_keys() {
 }
 
 interactive_params() {
-    custom_dest=$(ask_yn "是否自定义伪装站点？默认: www.cloudflare.com")
-    if [[ "$custom_dest" == "y" ]]; then
-        while true; do
-            read -p "请输入伪装站点（例如 swcdn.apple.com）: " REALITY_TARGET
-            [[ -n "$REALITY_TARGET" ]] && break
-            echo "伪装站点不能为空."
-        done
+    # 逻辑 2：一次性询问是否自定义，否则全部自动生成
+    custom_config=$(ask_yn "是否需要自定义 xHTTP 配置参数？(选 n 将全部自动生成)" "n")
+
+    if [[ "$custom_config" == "y" ]]; then
+        echo "================================================="
+        echo "提示：接下来的设置中，如果你不想输入，直接按回车即可自动生成。"
+        echo "================================================="
+        
+        read -p "请输入伪装站点 (直接回车默认: www.cloudflare.com): " REALITY_TARGET
+        REALITY_TARGET=${REALITY_TARGET:-"www.cloudflare.com"}
+
+        read -p "请输入 UUID (直接回车默认自动生成): " GLOBAL_UUID
+        GLOBAL_UUID=${GLOBAL_UUID:-$(/usr/local/bin/xHTTP uuid)}
+
+        read -p "请输入 Reality 私钥 (直接回车默认自动生成): " PRIVATE_KEY
+        if [[ -z "$PRIVATE_KEY" ]]; then
+            generate_reality_keys
+        else
+            read -p "请输入配套的 Reality 公钥: " PUBLIC_KEY
+            if [[ -z "$PUBLIC_KEY" ]]; then
+                echo "公钥不能为空，已回退为自动生成完整的 Reality 密钥对..."
+                generate_reality_keys
+            fi
+        fi
+
+        read -p "请输入 shortId [8-16位 16进制] (直接回车默认自动生成): " SHORT_ID
+        if [[ -z "$SHORT_ID" ]] || ! validate_hex_len "$SHORT_ID"; then
+            SHORT_ID=$(openssl rand -hex 8)
+            echo ">> 自动生成 shortId: $SHORT_ID"
+        fi
+
+        read -p "请输入 XHTTP path [需以 / 开头] (直接回车默认自动生成): " XHTTP_PATH
+        if [[ -z "$XHTTP_PATH" ]] || ! validate_path "$XHTTP_PATH"; then
+            XHTTP_PATH="/Client_upload_$(openssl rand -hex 4)"
+            echo ">> 自动生成 path: $XHTTP_PATH"
+        fi
     else
+        # 用户选择全程自动生成
         REALITY_TARGET="www.cloudflare.com"
-    fi
-
-    custom_uuid=$(ask_yn "是否自定义 UUID？默认使用 xHTTP uuid 自动生成")
-    if [[ "$custom_uuid" == "y" ]]; then
-        while true; do
-            read -p "请输入 UUID: " GLOBAL_UUID
-            [[ -n "$GLOBAL_UUID" ]] && break
-            echo "UUID 不能为空."
-        done
-    else
         GLOBAL_UUID=$(/usr/local/bin/xHTTP uuid)
-    fi
-
-    custom_key=$(ask_yn "是否自定义 Reality 公钥/私钥？默认自动生成")
-    if [[ "$custom_key" == "y" ]]; then
-        while true; do
-            read -p "请输入 Reality 私钥: " PRIVATE_KEY
-            read -p "请输入 Reality 公钥: " PUBLIC_KEY
-            [[ -n "$PRIVATE_KEY" && -n "$PUBLIC_KEY" ]] && break
-            echo "公钥和私钥不能为空."
-        done
-    else
         generate_reality_keys
-    fi
-
-    custom_sid=$(ask_yn "是否自定义 shortId？默认自动生成 16 hex")
-    if [[ "$custom_sid" == "y" ]]; then
-        while true; do
-            read -p "请输入 shortId（8-16 hex）: " SHORT_ID
-            validate_hex_len "$SHORT_ID" && break
-            echo "shortId 必须为 8-16 位十六进制字符."
-        done
-    else
         SHORT_ID=$(openssl rand -hex 8)
-    fi
-
-    custom_path=$(ask_yn "是否自定义 XHTTP path？默认自动生成")
-    if [[ "$custom_path" == "y" ]]; then
-        while true; do
-            read -p "请输入 XHTTP path（例如 /abc123）: " XHTTP_PATH
-            validate_path "$XHTTP_PATH" && break
-            echo "path 必须以 / 开头且不包含空白字符."
-        done
-    else
         XHTTP_PATH="/Client_upload_$(openssl rand -hex 4)"
     fi
 
-    custom_port=$(ask_yn "是否自定义起始端口？默认: $DEFAULT_START_PORT")
-    if [[ "$custom_port" == "y" ]]; then
+    echo "================================================="
+
+    # 逻辑 3：起始端口的询问与设定
+    custom_port=$(ask_yn "是否使用默认起始端口 $DEFAULT_START_PORT？" "y")
+    if [[ "$custom_port" == "n" ]]; then
         while true; do
-            read -p "请输入起始端口: " START_PORT
-            validate_port "$START_PORT" && break
-            echo "端口必须为 1-65535."
+            read -p "请输入自定义起始端口 (1-65535): " START_PORT
+            if validate_port "$START_PORT"; then
+                break
+            else
+                echo "端口格式错误，必须为 1-65535 之间的数字."
+            fi
         done
     else
         START_PORT=$DEFAULT_START_PORT
@@ -191,13 +194,27 @@ config_xHTTP() {
     mkdir -p /etc/xHTTP
     filter_valid_ips
     
+    # 逻辑 1：智能检测 IPv4 与 IPv6 的 WARP 兜底逻辑
     WARP_ENABLE=false
+    HAS_IPV6=false
     for ip in "${IP_ADDRESSES[@]}"; do
         if [[ "$ip" == *":"* ]]; then
-            input_warp_keys
+            HAS_IPV6=true
             break
         fi
     done
+
+    if [ "$HAS_IPV6" = true ]; then
+        echo "================================================="
+        echo "【检测到存在 IPv6 地址，必须配置 WARP 作为 IPv4 兜底】"
+        echo "================================================="
+        input_warp_keys
+    else
+        add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要增加 WARP 配置 (用于解锁流媒体/隐藏真实 IP)？" "n")
+        if [[ "$add_warp" == "y" ]]; then
+            input_warp_keys
+        fi
+    fi
 
     interactive_params
 
@@ -211,7 +228,6 @@ domainStrategy = \"IPIfNonMatch\"
     ipv6_inbounds=()
 
     if [ "$WARP_ENABLE" = true ]; then
-        # 增加一个专用的本地 SOCKS5 入站，用于脚本自身测试 WARP 连通性
         inbounds_section+="[[inbounds]]
 listen = \"127.0.0.1\"
 port = 40000
@@ -222,7 +238,6 @@ auth = \"noauth\"
 udp = true
 
 "
-        # 为本地测试入站增加专属路由，强制走 WARP
         routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"socks-local\"]
@@ -375,10 +390,8 @@ outboundTag = \"warp-ipv4\"
     
     if [ "$WARP_ENABLE" = true ]; then
         echo "正在测试 WARP 出口公网 IP (请稍候)..."
-        # 延时3秒等待 Xray WireGuard 握手成功
         sleep 3
         
-        # 使用本地创建的 SOCKS5 入站进行 curl 请求测试
         REAL_WARP_IP=$(curl -s --connect-timeout 5 -x socks5h://127.0.0.1:40000 https://ipv4.icanhazip.com)
         
         if [[ "$REAL_WARP_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -391,6 +404,15 @@ outboundTag = \"warp-ipv4\"
     
     echo "节点分享链接已隐蔽保存至: /etc/xHTTP/clients.txt"
     echo "如需复制节点，请执行: cat /etc/xHTTP/clients.txt"
+    echo "================================================="
+    
+    # 逻辑 3：防火墙防呆提示
+    echo -e "\033[31m【极度重要】\033[0m"
+    if [ "$START_PORT" -eq "$END_PORT" ]; then
+        echo -e "请务必在 VPS 控制台（安全组）和系统防火墙中放行端口: \033[33m$START_PORT\033[0m"
+    else
+        echo -e "请务必在 VPS 控制台（安全组）和系统防火墙中放行端口: \033[33m$START_PORT - $END_PORT\033[0m"
+    fi
     echo "================================================="
     echo ""
 }
