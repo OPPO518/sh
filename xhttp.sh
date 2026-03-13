@@ -98,10 +98,8 @@ generate_warp_keys() {
         -X POST "https://api.cloudflareclient.com/v0a884/reg" \
         -d "{\"key\":\"$WARP_PUBLIC_KEY\",\"install_id\":\"$INSTALL_ID\",\"fcm_token\":\"$FCM_TOKEN\",\"tos\":\"$TOS\",\"model\":\"Linux\",\"build\":\"27.0\",\"locale\":\"en_US\"}")
 
-    # 精确匹配 172. 开头的内网 IP，避免抓取到 endpoint 导致换行错误
     WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | awk -F'"' '{print $4}' | grep '^172\.' | head -n 1)
     
-    # 终极兜底：如果 API 返回异常，强制给定标准内网 IP
     if [[ -z "$WARP_IPV4" ]]; then
         WARP_IPV4="172.16.0.2"
     fi
@@ -304,8 +302,21 @@ sendThrough = \"$ip\"
 protocol = \"freedom\"
 tag = \"$out_tag\"
 
+[outbounds.settings]
 "
+        # 核心修复 2：为 freedom 出站强制指定 DNS 解析的 IP 家族，防止 bind 错误
+        if [[ "$ip" == *":"* ]]; then
+            outbounds_section+="domainStrategy = \"UseIPv6\"
+
+"
+        else
+            outbounds_section+="domainStrategy = \"UseIPv4\"
+
+"
+        fi
+
         if [[ "$ip" == *":"* ]] && [ "$WARP_ENABLE" = true ]; then
+            # 核心修复 1：去除错误的方括号，使用标准的 ::/0 表示所有 IPv6 流量
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -315,7 +326,7 @@ outboundTag = \"warp-ipv4\"
 [[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
-ip = [\"[::]/0\"]
+ip = [\"::/0\"]
 outboundTag = \"$out_tag\"
 
 "
