@@ -40,9 +40,18 @@ validate_path() {
 
 identify_arch() {
     case "$(uname -m)" in
-        'amd64' | 'x86_64') MACHINE_XRAY='64' ;;
-        'armv8' | 'aarch64') MACHINE_XRAY='arm64-v8a' ;;
-        *) echo -e "\033[31merror: 当前 CPU 架构不支持！\033[0m"; exit 1 ;;
+        'amd64' | 'x86_64')
+            MACHINE_XRAY='64'
+            MACHINE_WGCF='amd64'
+            ;;
+        'armv8' | 'aarch64')
+            MACHINE_XRAY='arm64-v8a'
+            MACHINE_WGCF='arm64'
+            ;;
+        *)
+            echo -e "\033[31merror: 当前 CPU 架构不支持！本脚本仅支持 amd64 或 arm64。\033[0m"
+            exit 1
+            ;;
     esac
 }
 
@@ -96,32 +105,68 @@ filter_valid_ips() {
 }
 
 ############################################
-# Vercel 云端 API 自动生成 WARP (失败自动降级)
+# 终极本地 WARP 注册 (原生 Bash + warpapi 兜底)
 ############################################
-generate_warp_vercel() {
+generate_warp_auto() {
     echo "================================================="
-    echo "正在请求 Vercel 云端 API 自动注册 WARP 账号..."
+    echo "正在使用 3x-ui 同款算法进行本地 WARP 注册..."
     echo "================================================="
     
-    # 向云端请求数据，最多等待 15 秒
-    RESPONSE=$(curl -sL --max-time 15 "https://warp-reg.vercel.app")
+    # 方案 1：尝试使用纯 Bash 模拟 3x-ui 请求 (最干净，无第三方依赖)
+    if ! command -v wg &> /dev/null; then
+        apt-get install -y wireguard-tools 2>/dev/null || yum install -y wireguard-tools 2>/dev/null
+    fi
     
-    # 用兼容性最强的正则精确截取 JSON 数据
-    WARP_PRIVATE_KEY=$(echo "$RESPONSE" | grep -o '"private_key":"[^"]*"' | cut -d'"' -f4)
+    WARP_PRIVATE_KEY=$(wg genkey 2>/dev/null)
+    WARP_PUBLIC_KEY=$(echo "$WARP_PRIVATE_KEY" | wg pubkey 2>/dev/null)
+    INSTALL_ID=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22)
+    TOS=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+    
+    # 模拟 PC 端请求，避免触发 Android 版封控
+    DATA="{\"key\":\"${WARP_PUBLIC_KEY}\",\"tos\":\"${TOS}\",\"type\":\"PC\",\"model\":\"x-ui\",\"name\":\"${INSTALL_ID}\"}"
+    
+    RESPONSE=$(curl -s --max-time 8 -X POST "https://api.cloudflareclient.com/v0a2158/reg" \
+      -H "CF-Client-Version: a-7.21-0721" \
+      -H "Content-Type: application/json" \
+      -d "$DATA")
+      
+    CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
     WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | cut -d'"' -f4)
-    WARP_RESERVED=$(echo "$RESPONSE" | grep -o '"reserved_dec":\[[^]]*\]' | cut -d'[' -f2 | cut -d']' -f1)
-
-    if [[ -n "$WARP_PRIVATE_KEY" && -n "$WARP_IPV4" && -n "$WARP_RESERVED" ]]; then
+    
+    # 方案 2：如果纯 Bash 被限流拦截，立刻启用你测试成功的 warpapi 绕过指纹！
+    if [[ -z "$CLIENT_ID" ]]; then
+        echo -e "\033[33m原生 API 请求受限，正在启用 warpapi 高级指纹伪装绕过...\033[0m"
+        mkdir -p /tmp/warp_work
+        cd /tmp/warp_work
+        identify_arch
+        curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
+        chmod +x warpapi
+        output=$(./warpapi 2>/dev/null)
+        WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r')
+        CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r')
+        WARP_IPV4="172.16.0.2"
+        cd - >/dev/null
+        rm -rf /tmp/warp_work
+    fi
+    
+    if [[ -n "$WARP_PRIVATE_KEY" && -n "$CLIENT_ID" ]]; then
+        # 【全场最重要的修复！】：CLIENT_ID 是 UUID，直接截取前 6 位 Hex 转 10 进制！
+        CLEAN_HEX=$(echo "$CLIENT_ID" | tr -d '-' | tr '[:upper:]' '[:lower:]')
+        R1=$((16#${CLEAN_HEX:0:2}))
+        R2=$((16#${CLEAN_HEX:2:2}))
+        R3=$((16#${CLEAN_HEX:4:2}))
+        WARP_RESERVED="$R1, $R2, $R3"
         WARP_ENABLE=true
-        echo -e "\033[32m云端 API 注册并解析成功！\033[0m"
-        echo "分配专属 IPv4: $WARP_IPV4/32"
-        echo "提取 Reserved 数组: [$WARP_RESERVED]"
+        
+        echo -e "\033[32mWARP 注册并解析成功！\033[0m"
+        echo "分配专属 IPv4: $WARP_IPV4"
+        echo "动态计算 Reserved: [$WARP_RESERVED] (修复版)"
         echo "================================================="
         return
     fi
 
-    # API 失效触发降级
-    echo -e "\033[31m云端 API 请求超时或返回数据异常！\033[0m"
+    # 方案 3：连防线都跌破了，那就必须触发防呆手工兜底
+    echo -e "\033[31m所有自动提取手段均失效！\033[0m"
     echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
     input_warp_keys
 }
@@ -151,7 +196,6 @@ input_warp_keys() {
         [[ -n "$WARP_RESERVED" ]] && break
     done
 
-    # 手动输入通常自带掩码，我们清洗一下确保格式统一
     WARP_IPV4=$(echo "$WARP_IPV4" | cut -d'/' -f1)
     WARP_ENABLE=true
     echo "手动 WARP 参数已记录。"
@@ -249,11 +293,11 @@ config_xHTTP() {
     done
 
     if [ "$HAS_IPV6" = true ]; then
-        generate_warp_vercel
+        generate_warp_auto
     else
         add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要配置 WARP (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
         if [[ "$add_warp" == "y" ]]; then
-            generate_warp_vercel
+            generate_warp_auto
         fi
     fi
 
@@ -448,14 +492,14 @@ outboundTag = \"warp-ipv4\"
     
     if [ "$WARP_ENABLE" = true ]; then
         echo "正在测试 WARP 出口公网 IP (请稍候)..."
-        sleep 3
+        sleep 4
         
         REAL_WARP_IP=$(curl -s --connect-timeout 5 -x socks5h://127.0.0.1:40000 https://ipv4.icanhazip.com)
         
         if [[ "$REAL_WARP_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo -e "WARP 兜底与防溯源状态: \033[32m全面生效 (公网出口 IP: $REAL_WARP_IP)\033[0m"
         else
-            echo -e "WARP 兜底与防溯源状态: \033[31m失败或超时，请检查密钥是否有效\033[0m"
+            echo -e "WARP 兜底与防溯源状态: \033[31m失败或超时，请检查您的 VPS 出口连通性\033[0m"
         fi
         echo "================================================="
     fi
