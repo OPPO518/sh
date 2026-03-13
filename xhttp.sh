@@ -38,21 +38,11 @@ validate_path() {
     [[ "$1" =~ ^/[^[:space:]]*$ ]]
 }
 
-# 提取并精简的 CPU 架构判断
 identify_arch() {
     case "$(uname -m)" in
-        'amd64' | 'x86_64')
-            MACHINE_XRAY='64'
-            MACHINE_WGCF='amd64'
-            ;;
-        'armv8' | 'aarch64')
-            MACHINE_XRAY='arm64-v8a'
-            MACHINE_WGCF='arm64'
-            ;;
-        *)
-            echo -e "\033[31merror: 当前 CPU 架构不支持！本脚本仅支持 amd64 或 arm64。\033[0m"
-            exit 1
-            ;;
+        'amd64' | 'x86_64') MACHINE_XRAY='64' ;;
+        'armv8' | 'aarch64') MACHINE_XRAY='arm64-v8a' ;;
+        *) echo -e "\033[31merror: 当前 CPU 架构不支持！\033[0m"; exit 1 ;;
     esac
 }
 
@@ -61,23 +51,18 @@ install_xHTTP() {
     echo "安装最新 Xray（重命名为 xHTTP）..."
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
 
-    # 建立专属文件夹，确保 geo 数据库文件与内核在同一目录
     mkdir -p /usr/local/xHTTP
     cd /usr/local/xHTTP
 
     echo "下载最新 Xray 内核 (架构: $MACHINE_XRAY)..."
     curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${MACHINE_XRAY}.zip"
 
-    # 解压并重命名内核
     unzip -o xray.zip
     mv xray xHTTP
     chmod +x xHTTP
     rm -f xray.zip
 
-    # 创建软链接，完美兼容系统路径
     ln -sf /usr/local/xHTTP/xHTTP /usr/local/bin/xHTTP
-
-    # 切回原目录
     cd - >/dev/null
 
     cat <<EOF >/etc/systemd/system/xHTTP.service
@@ -111,61 +96,33 @@ filter_valid_ips() {
 }
 
 ############################################
-# 高级指纹伪装自动生成 WARP (失败自动降级)
+# Vercel 云端 API 自动生成 WARP (失败自动降级)
 ############################################
-generate_warp_warpapi() {
-    identify_arch
+generate_warp_vercel() {
     echo "================================================="
-    echo "正在使用高级指纹伪装接口自动注册 WARP 账号..."
+    echo "正在请求 Vercel 云端 API 自动注册 WARP 账号..."
     echo "================================================="
     
-    # 确保依赖存在
-    if ! command -v xxd &> /dev/null; then
-        apt-get install -y xxd 2>/dev/null || yum install -y vim-common 2>/dev/null
-    fi
-
-    # 创建临时工作目录
-    mkdir -p /tmp/warp_work
-    cd /tmp/warp_work
-
-    echo "获取核心注册组件 (架构: $MACHINE_WGCF)..."
-    # 白嫖甬哥编译好的高级指纹绕过组件
-    curl -sL -o warpapi --retry 2 "https://gitlab.com/rwkgyg/CFwarp/-/raw/main/point/cpu1/${MACHINE_WGCF}"
-    chmod +x warpapi
-
-    # 运行并静默提取关键参数
-    echo "伪装请求中，请稍候..."
-    output=$(./warpapi 2>/dev/null)
+    # 向云端请求数据，最多等待 15 秒
+    RESPONSE=$(curl -sL --max-time 15 "https://warp-reg.vercel.app")
     
-    WARP_PRIVATE_KEY=$(echo "$output" | awk -F ': ' '/private_key/{print $2}' | tr -d '\r')
-    CLIENT_ID=$(echo "$output" | awk -F ': ' '/device_id/{print $2}' | tr -d '\r')
-    WARP_IPV4="172.16.0.2"
+    # 用兼容性最强的正则精确截取 JSON 数据
+    WARP_PRIVATE_KEY=$(echo "$RESPONSE" | grep -o '"private_key":"[^"]*"' | cut -d'"' -f4)
+    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | cut -d'"' -f4)
+    WARP_RESERVED=$(echo "$RESPONSE" | grep -o '"reserved_dec":\[[^]]*\]' | cut -d'[' -f2 | cut -d']' -f1)
 
-    if [[ -n "$WARP_PRIVATE_KEY" && -n "$CLIENT_ID" ]]; then
-        # 基于 Client ID 精准换算 Xray 所需的 Reserved 数组
-        RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
-        R1=$((16#${RESERVED_HEX:0:2}))
-        R2=$((16#${RESERVED_HEX:2:2}))
-        R3=$((16#${RESERVED_HEX:4:2}))
-        WARP_RESERVED="$R1, $R2, $R3"
+    if [[ -n "$WARP_PRIVATE_KEY" && -n "$WARP_IPV4" && -n "$WARP_RESERVED" ]]; then
         WARP_ENABLE=true
-        
-        echo -e "\033[32m伪装注册并解析成功！\033[0m"
-        echo "分配专属 IPv4: $WARP_IPV4"
-        echo "动态计算 Reserved: [$WARP_RESERVED]"
+        echo -e "\033[32m云端 API 注册并解析成功！\033[0m"
+        echo "分配专属 IPv4: $WARP_IPV4/32"
+        echo "提取 Reserved 数组: [$WARP_RESERVED]"
         echo "================================================="
-        
-        # 阅后即焚，清理现场
-        cd - >/dev/null
-        rm -rf /tmp/warp_work
         return
     fi
 
-    # 如果运行到这里，说明自动提取失败，触发降级
-    echo -e "\033[31m自动提取失败（极少数高强度拦截地区）！\033[0m"
+    # API 失效触发降级
+    echo -e "\033[31m云端 API 请求超时或返回数据异常！\033[0m"
     echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
-    cd - >/dev/null
-    rm -rf /tmp/warp_work
     input_warp_keys
 }
 
@@ -194,6 +151,8 @@ input_warp_keys() {
         [[ -n "$WARP_RESERVED" ]] && break
     done
 
+    # 手动输入通常自带掩码，我们清洗一下确保格式统一
+    WARP_IPV4=$(echo "$WARP_IPV4" | cut -d'/' -f1)
     WARP_ENABLE=true
     echo "手动 WARP 参数已记录。"
     echo "================================================="
@@ -290,11 +249,11 @@ config_xHTTP() {
     done
 
     if [ "$HAS_IPV6" = true ]; then
-        generate_warp_warpapi
+        generate_warp_vercel
     else
         add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要配置 WARP (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
         if [[ "$add_warp" == "y" ]]; then
-            generate_warp_warpapi
+            generate_warp_vercel
         fi
     fi
 
@@ -310,7 +269,6 @@ domainStrategy = \"IPIfNonMatch\"
     ipv6_inbounds=()
 
     if [ "$WARP_ENABLE" = true ]; then
-        # 本地探针 SOCKS5 入站
         inbounds_section+="[[inbounds]]
 listen = \"127.0.0.1\"
 port = 40000
@@ -321,7 +279,6 @@ auth = \"noauth\"
 udp = true
 
 "
-        # 1. 第一层防御：探针与全局 CN 防溯源隔离 (最高优先级)
         routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"socks-local\"]
@@ -345,7 +302,7 @@ protocol = \"wireguard\"
 [outbounds.settings]
 mtu = 1420
 secretKey = \"$WARP_PRIVATE_KEY\"
-address = [\"$WARP_IPV4\"]
+address = [\"$WARP_IPV4/32\"]
 workers = 2
 domainStrategy = \"ForceIPv4\"
 reserved = [$WARP_RESERVED]
@@ -415,7 +372,6 @@ tag = \"$out_tag\"
             outbounds_section+="domainStrategy = \"UseIPv6\"
 
 "
-            # 2. 第二层防御：IPv6 节点的 Google/YouTube VIP 直通快车道
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -423,7 +379,6 @@ domain = [\"geosite:google\", \"geosite:youtube\"]
 outboundTag = \"$out_tag\"
 
 "
-            # 3. 第三层：IPv6 常规原生链路
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -435,7 +390,6 @@ outboundTag = \"$out_tag\"
             outbounds_section+="domainStrategy = \"UseIPv4\"
 
 "
-            # 5. 第五层：IPv4 原生直连 (兜底)
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -451,7 +405,6 @@ outboundTag = \"$out_tag\"
         index=$((index+1))
     done
 
-    # 4. 第四层：IPv6 节点的 WARP 终极兜底 (解决纯 IPv4 网站断连)
     if [ "$WARP_ENABLE" = true ] && [ ${#ipv6_inbounds[@]} -gt 0 ]; then
         ipv6_inbounds_str=$(IFS=, ; echo "${ipv6_inbounds[*]}")
         routing_section+="[[routing.rules]]
