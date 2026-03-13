@@ -14,7 +14,6 @@ ask_yn() {
         else
             read -p "$prompt [y/N]: " answer >&2
         fi
-        # 如果直接回车，使用默认值
         answer=${answer:-$default}
         case "$answer" in
             y|Y) echo "y"; return ;;
@@ -81,7 +80,7 @@ filter_valid_ips() {
 }
 
 ############################################
-# WARP 手动配置 (用于 IPv6 的 IPv4 兜底)
+# WARP 手动配置 (用于防溯源与 IPv4 兜底)
 ############################################
 input_warp_keys() {
     echo "================================================="
@@ -127,7 +126,6 @@ generate_reality_keys() {
 }
 
 interactive_params() {
-    # 逻辑 2：一次性询问是否自定义，否则全部自动生成
     custom_config=$(ask_yn "是否需要自定义 xHTTP 配置参数？(选 n 将全部自动生成)" "n")
 
     if [[ "$custom_config" == "y" ]]; then
@@ -164,7 +162,6 @@ interactive_params() {
             echo ">> 自动生成 path: $XHTTP_PATH"
         fi
     else
-        # 用户选择全程自动生成
         REALITY_TARGET="www.cloudflare.com"
         GLOBAL_UUID=$(/usr/local/bin/xHTTP uuid)
         generate_reality_keys
@@ -174,7 +171,6 @@ interactive_params() {
 
     echo "================================================="
 
-    # 逻辑 3：起始端口的询问与设定
     custom_port=$(ask_yn "是否使用默认起始端口 $DEFAULT_START_PORT？" "y")
     if [[ "$custom_port" == "n" ]]; then
         while true; do
@@ -194,7 +190,6 @@ config_xHTTP() {
     mkdir -p /etc/xHTTP
     filter_valid_ips
     
-    # 逻辑 1：智能检测 IPv4 与 IPv6 的 WARP 兜底逻辑
     WARP_ENABLE=false
     HAS_IPV6=false
     for ip in "${IP_ADDRESSES[@]}"; do
@@ -210,7 +205,7 @@ config_xHTTP() {
         echo "================================================="
         input_warp_keys
     else
-        add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要增加 WARP 配置 (用于解锁流媒体/隐藏真实 IP)？" "n")
+        add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要增加 WARP 配置 (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
         if [[ "$add_warp" == "y" ]]; then
             input_warp_keys
         fi
@@ -228,6 +223,7 @@ domainStrategy = \"IPIfNonMatch\"
     ipv6_inbounds=()
 
     if [ "$WARP_ENABLE" = true ]; then
+        # 本地探针 SOCKS5 入站
         inbounds_section+="[[inbounds]]
 listen = \"127.0.0.1\"
 port = 40000
@@ -238,9 +234,20 @@ auth = \"noauth\"
 udp = true
 
 "
+        # 1. 第一层防御：探针与全局 CN 防溯源隔离 (最高优先级)
         routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"socks-local\"]
+outboundTag = \"warp-ipv4\"
+
+[[routing.rules]]
+type = \"field\"
+domain = [\"geosite:cn\"]
+outboundTag = \"warp-ipv4\"
+
+[[routing.rules]]
+type = \"field\"
+ip = [\"geoip:cn\"]
 outboundTag = \"warp-ipv4\"
 
 "
@@ -321,6 +328,15 @@ tag = \"$out_tag\"
             outbounds_section+="domainStrategy = \"UseIPv6\"
 
 "
+            # 2. 第二层防御：IPv6 节点的 Google/YouTube VIP 直通快车道
+            routing_section+="[[routing.rules]]
+type = \"field\"
+inboundTag = [\"$in_tag\"]
+domain = [\"geosite:google\", \"geosite:youtube\"]
+outboundTag = \"$out_tag\"
+
+"
+            # 3. 第三层：IPv6 常规原生链路
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -332,6 +348,7 @@ outboundTag = \"$out_tag\"
             outbounds_section+="domainStrategy = \"UseIPv4\"
 
 "
+            # 5. 第五层：IPv4 原生直连 (兜底)
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -347,6 +364,7 @@ outboundTag = \"$out_tag\"
         index=$((index+1))
     done
 
+    # 4. 第四层：IPv6 节点的 WARP 终极兜底 (解决纯 IPv4 网站断连)
     if [ "$WARP_ENABLE" = true ] && [ ${#ipv6_inbounds[@]} -gt 0 ]; then
         ipv6_inbounds_str=$(IFS=, ; echo "${ipv6_inbounds[*]}")
         routing_section+="[[routing.rules]]
@@ -395,9 +413,9 @@ outboundTag = \"warp-ipv4\"
         REAL_WARP_IP=$(curl -s --connect-timeout 5 -x socks5h://127.0.0.1:40000 https://ipv4.icanhazip.com)
         
         if [[ "$REAL_WARP_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo -e "WARP 兜底状态: \033[32m成功 (公网出口 IP: $REAL_WARP_IP)\033[0m"
+            echo -e "WARP 兜底与防溯源状态: \033[32m全面生效 (公网出口 IP: $REAL_WARP_IP)\033[0m"
         else
-            echo -e "WARP 兜底状态: \033[31m失败或超时，请检查密钥是否有效\033[0m"
+            echo -e "WARP 兜底与防溯源状态: \033[31m失败或超时，请检查密钥是否有效\033[0m"
         fi
         echo "================================================="
     fi
@@ -406,7 +424,6 @@ outboundTag = \"warp-ipv4\"
     echo "如需复制节点，请执行: cat /etc/xHTTP/clients.txt"
     echo "================================================="
     
-    # 逻辑 3：防火墙防呆提示
     echo -e "\033[31m【极度重要】\033[0m"
     if [ "$START_PORT" -eq "$END_PORT" ]; then
         echo -e "请务必在 VPS 控制台（安全组）和系统防火墙中放行端口: \033[33m$START_PORT\033[0m"
