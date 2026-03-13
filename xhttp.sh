@@ -81,16 +81,19 @@ input_warp_keys() {
     echo "================================================="
     while true; do
         read -p "请输入可用的 WARP secretKey (例如: gKcCAxJWa...): " WARP_PRIVATE_KEY
+        WARP_PRIVATE_KEY=$(echo "$WARP_PRIVATE_KEY" | tr -d '" ')
         [[ -n "$WARP_PRIVATE_KEY" ]] && break
     done
 
     while true; do
-        read -p "请输入 WARP 内网 IPv4 地址 (包含掩码，例如: 172.16.0.2/32): " WARP_IPV4
+        read -p "请输入 WARP 内网 IPv4 地址 (例如: 172.16.0.2/32): " WARP_IPV4
+        WARP_IPV4=$(echo "$WARP_IPV4" | tr -d '[]" ')
         [[ -n "$WARP_IPV4" ]] && break
     done
 
     while true; do
-        read -p "请输入 WARP reserved 数组 (例如: [71, 68, 150]): " WARP_RESERVED
+        read -p "请输入 WARP reserved 数组 (例如: 71, 68, 150): " WARP_RESERVED
+        WARP_RESERVED=$(echo "$WARP_RESERVED" | tr -d '[]"')
         [[ -n "$WARP_RESERVED" ]] && break
     done
 
@@ -208,6 +211,24 @@ domainStrategy = \"IPIfNonMatch\"
     ipv6_inbounds=()
 
     if [ "$WARP_ENABLE" = true ]; then
+        # 增加一个专用的本地 SOCKS5 入站，用于脚本自身测试 WARP 连通性
+        inbounds_section+="[[inbounds]]
+listen = \"127.0.0.1\"
+port = 40000
+protocol = \"socks\"
+tag = \"socks-local\"
+[inbounds.settings]
+auth = \"noauth\"
+udp = true
+
+"
+        # 为本地测试入站增加专属路由，强制走 WARP
+        routing_section+="[[routing.rules]]
+type = \"field\"
+inboundTag = [\"socks-local\"]
+outboundTag = \"warp-ipv4\"
+
+"
         outbounds_section+="[[outbounds]]
 tag = \"warp-ipv4\"
 protocol = \"wireguard\"
@@ -218,7 +239,7 @@ secretKey = \"$WARP_PRIVATE_KEY\"
 address = [\"$WARP_IPV4\"]
 workers = 2
 domainStrategy = \"ForceIPv4\"
-reserved = $WARP_RESERVED
+reserved = [$WARP_RESERVED]
 noKernelTun = true
 
 [[outbounds.settings.peers]]
@@ -285,7 +306,6 @@ tag = \"$out_tag\"
             outbounds_section+="domainStrategy = \"UseIPv6\"
 
 "
-            # 原生 IPv6 路由规则 (排在前面，优先匹配双栈)
             routing_section+="[[routing.rules]]
 type = \"field\"
 inboundTag = [\"$in_tag\"]
@@ -312,7 +332,6 @@ outboundTag = \"$out_tag\"
         index=$((index+1))
     done
 
-    # 追加聚合的 WARP 兜底路由 (排在最后，仅针对纯 IPv4 流量兜底)
     if [ "$WARP_ENABLE" = true ] && [ ${#ipv6_inbounds[@]} -gt 0 ]; then
         ipv6_inbounds_str=$(IFS=, ; echo "${ipv6_inbounds[*]}")
         routing_section+="[[routing.rules]]
@@ -353,11 +372,23 @@ outboundTag = \"warp-ipv4\"
     echo "================================================="
     systemctl --no-pager status xHTTP.service
     echo "================================================="
+    
     if [ "$WARP_ENABLE" = true ]; then
-        echo -e "WARP 兜底状态: \033[32m已成功注入配置\033[0m"
-        echo "绑定的 WARP IPv4: $WARP_IPV4"
+        echo "正在测试 WARP 出口公网 IP (请稍候)..."
+        # 延时3秒等待 Xray WireGuard 握手成功
+        sleep 3
+        
+        # 使用本地创建的 SOCKS5 入站进行 curl 请求测试
+        REAL_WARP_IP=$(curl -s --connect-timeout 5 -x socks5h://127.0.0.1:40000 https://ipv4.icanhazip.com)
+        
+        if [[ "$REAL_WARP_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo -e "WARP 兜底状态: \033[32m成功 (公网出口 IP: $REAL_WARP_IP)\033[0m"
+        else
+            echo -e "WARP 兜底状态: \033[31m失败或超时，请检查密钥是否有效\033[0m"
+        fi
         echo "================================================="
     fi
+    
     echo "节点分享链接已隐蔽保存至: /etc/xHTTP/clients.txt"
     echo "如需复制节点，请执行: cat /etc/xHTTP/clients.txt"
     echo "================================================="
