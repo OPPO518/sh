@@ -38,7 +38,26 @@ validate_path() {
     [[ "$1" =~ ^/[^[:space:]]*$ ]]
 }
 
+# 提取并精简的 CPU 架构判断
+identify_arch() {
+    case "$(uname -m)" in
+        'amd64' | 'x86_64')
+            MACHINE_XRAY='64'
+            MACHINE_WGCF='amd64'
+            ;;
+        'armv8' | 'aarch64')
+            MACHINE_XRAY='arm64-v8a'
+            MACHINE_WGCF='arm64'
+            ;;
+        *)
+            echo -e "\033[31merror: 当前 CPU 架构不支持！本脚本仅支持 amd64 或 arm64。\033[0m"
+            exit 1
+            ;;
+    esac
+}
+
 install_xHTTP() {
+    identify_arch
     echo "安装最新 Xray（重命名为 xHTTP）..."
     apt-get install -y curl unzip openssl 2>/dev/null || yum install -y curl unzip openssl 2>/dev/null
 
@@ -46,8 +65,8 @@ install_xHTTP() {
     mkdir -p /usr/local/xHTTP
     cd /usr/local/xHTTP
 
-    echo "下载最新 Xray 内核..."
-    curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+    echo "下载最新 Xray 内核 (架构: $MACHINE_XRAY)..."
+    curl -L -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${MACHINE_XRAY}.zip"
 
     # 解压并重命名内核
     unzip -o xray.zip
@@ -55,10 +74,10 @@ install_xHTTP() {
     chmod +x xHTTP
     rm -f xray.zip
 
-    # 创建软链接，完美兼容脚本其他地方的 /usr/local/bin/xHTTP 路径
+    # 创建软链接，完美兼容系统路径
     ln -sf /usr/local/xHTTP/xHTTP /usr/local/bin/xHTTP
 
-    # 切回原目录，防止后续路径错乱
+    # 切回原目录
     cd - >/dev/null
 
     cat <<EOF >/etc/systemd/system/xHTTP.service
@@ -92,11 +111,79 @@ filter_valid_ips() {
 }
 
 ############################################
-# WARP 手动配置 (用于防溯源与 IPv4 兜底)
+# 官方 wgcf 自动生成 WARP (失败则自动降级)
+############################################
+generate_warp_wgcf() {
+    identify_arch
+    echo "================================================="
+    echo "正在使用官方 wgcf 工具自动注册 WARP 账号..."
+    echo "================================================="
+    
+    # 确保依赖存在
+    if ! command -v xxd &> /dev/null; then
+        apt-get install -y xxd 2>/dev/null || yum install -y vim-common 2>/dev/null
+    fi
+
+    # 创建临时工作目录
+    mkdir -p /tmp/wgcf_work
+    cd /tmp/wgcf_work
+
+    echo "下载 wgcf (架构: $MACHINE_WGCF)..."
+    # 获取最新 wgcf 下载直链
+    WGCF_URL=$(curl -sL "https://api.github.com/repos/ViRb3/wgcf/releases/latest" | grep "browser_download_url" | grep "linux_${MACHINE_WGCF}" | cut -d '"' -f 4 | head -n 1)
+    if [ -z "$WGCF_URL" ]; then
+        WGCF_URL="https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_${MACHINE_WGCF}"
+    fi
+
+    curl -sL -o wgcf "$WGCF_URL"
+    chmod +x wgcf
+
+    echo "请求 Cloudflare API 注册账号..."
+    ./wgcf register --accept-tos >/dev/null 2>&1
+    sleep 2
+    ./wgcf generate >/dev/null 2>&1
+
+    # 开始解析与提取
+    if [ -f "wgcf-profile.conf" ] && [ -f "wgcf-account.toml" ]; then
+        WARP_PRIVATE_KEY=$(grep 'PrivateKey' wgcf-profile.conf | awk -F'= ' '{print $2}' | tr -d ' ' | tr -d '\r')
+        WARP_IPV4=$(grep 'Address' wgcf-profile.conf | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | head -n 1)
+        CLIENT_ID=$(grep 'client_id' wgcf-account.toml | awk -F"'" '{print $2}')
+
+        if [[ -n "$WARP_PRIVATE_KEY" && -n "$WARP_IPV4" && -n "$CLIENT_ID" ]]; then
+            # 精准换算 Reserved 数组
+            RESERVED_HEX=$(echo -n "${CLIENT_ID:0:4}" | base64 -d 2>/dev/null | xxd -p | head -c 6)
+            R1=$((16#${RESERVED_HEX:0:2}))
+            R2=$((16#${RESERVED_HEX:2:2}))
+            R3=$((16#${RESERVED_HEX:4:2}))
+            WARP_RESERVED="$R1, $R2, $R3"
+            WARP_ENABLE=true
+            
+            echo -e "\033[32mwgcf 自动注册并解析成功！\033[0m"
+            echo "分配专属 IPv4: $WARP_IPV4"
+            echo "动态计算 Reserved: [$WARP_RESERVED]"
+            echo "================================================="
+            
+            # 清理现场并返回
+            cd - >/dev/null
+            rm -rf /tmp/wgcf_work
+            return
+        fi
+    fi
+
+    # 如果运行到这里，说明自动提取失败，触发降级
+    echo -e "\033[31m自动提取失败（可能遇 Cloudflare 限制拦截）！\033[0m"
+    echo -e "\033[33m>>> 触发防呆兜底，降级为【手动交互输入模式】<<<\033[0m"
+    cd - >/dev/null
+    rm -rf /tmp/wgcf_work
+    input_warp_keys
+}
+
+############################################
+# 手动输入 WARP (兜底模式)
 ############################################
 input_warp_keys() {
     echo "================================================="
-    echo "请输入配置 WARP 所需的参数"
+    echo "请输入您已有的可用 WARP 参数"
     echo "================================================="
     while true; do
         read -p "请输入可用的 WARP secretKey (例如: gKcCAxJWa...): " WARP_PRIVATE_KEY
@@ -117,12 +204,12 @@ input_warp_keys() {
     done
 
     WARP_ENABLE=true
-    echo "WARP 参数已记录。"
+    echo "手动 WARP 参数已记录。"
     echo "================================================="
 }
 
 ############################################
-# 新版 Reality 密钥解析
+# Reality 密钥解析
 ############################################
 generate_reality_keys() {
     echo ">> 自动生成 Reality 密钥..."
@@ -212,14 +299,11 @@ config_xHTTP() {
     done
 
     if [ "$HAS_IPV6" = true ]; then
-        echo "================================================="
-        echo "【检测到存在 IPv6 地址，必须配置 WARP 作为 IPv4 兜底】"
-        echo "================================================="
-        input_warp_keys
+        generate_warp_wgcf
     else
-        add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要增加 WARP 配置 (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
+        add_warp=$(ask_yn "检测到当前仅有 IPv4 地址，是否需要配置 WARP (用于防溯源隔离大陆流量/隐藏真实 IP)？" "n")
         if [[ "$add_warp" == "y" ]]; then
-            input_warp_keys
+            generate_warp_wgcf
         fi
     fi
 
