@@ -98,10 +98,17 @@ generate_warp_keys() {
         -X POST "https://api.cloudflareclient.com/v0a884/reg" \
         -d "{\"key\":\"$WARP_PUBLIC_KEY\",\"install_id\":\"$INSTALL_ID\",\"fcm_token\":\"$FCM_TOKEN\",\"tos\":\"$TOS\",\"model\":\"Linux\",\"build\":\"27.0\",\"locale\":\"en_US\"}")
 
-    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | awk -F'"' '{print $4}')
+    # 精确匹配 172. 开头的内网 IP，避免抓取到 endpoint 导致换行错误
+    WARP_IPV4=$(echo "$RESPONSE" | grep -o '"v4":"[^"]*"' | awk -F'"' '{print $4}' | grep '^172\.' | head -n 1)
+    
+    # 终极兜底：如果 API 返回异常，强制给定标准内网 IP
+    if [[ -z "$WARP_IPV4" ]]; then
+        WARP_IPV4="172.16.0.2"
+    fi
+
     CLIENT_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | awk -F'"' '{print $4}')
 
-    if [[ -z "$WARP_IPV4" || -z "$CLIENT_ID" ]]; then
+    if [[ -z "$CLIENT_ID" ]]; then
         echo "WARP 自动注册失败！IPv6 节点可能无法访问 IPv4 网站。"
         WARP_ENABLE=false
         return
@@ -238,6 +245,7 @@ address = [\"$WARP_IPV4/32\"]
 workers = 2
 domainStrategy = \"ForceIPv4\"
 reserved = $WARP_RESERVED
+noKernelTun = true
 
 [[outbounds.settings.peers]]
 publicKey = \"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\"
