@@ -31,6 +31,9 @@ fi
 # 将输入的字符串转换为数组
 read -a DOMAIN_LIST <<< "$DOMAIN_INPUT"
 
+# 获取域名的总数量，用于后续判断路径结构
+DOMAIN_COUNT=${#DOMAIN_LIST[@]}
+
 # 统一定义节点证书的根目录绝对路径
 BASE_CERT_DIR="/etc/ssl/node_certs"
 
@@ -67,8 +70,12 @@ for DOMAIN in "${DOMAIN_LIST[@]}"; do
     echo -e "${green}开始处理域名: ${DOMAIN}${plain}"
     echo -e "${yellow}==================================================${plain}"
     
-    # 为当前域名创建专属绝对路径
-    DOMAIN_CERT_DIR="${BASE_CERT_DIR}/${DOMAIN}"
+    # 核心优化：判断是单域名还是多域名，动态决定存放路径
+    if [[ $DOMAIN_COUNT -eq 1 ]]; then
+        DOMAIN_CERT_DIR="${BASE_CERT_DIR}"
+    else
+        DOMAIN_CERT_DIR="${BASE_CERT_DIR}/${DOMAIN}"
+    fi
     mkdir -p "$DOMAIN_CERT_DIR"
 
     # 执行 DNS API 签发 (强制 ECC 证书)
